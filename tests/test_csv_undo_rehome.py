@@ -350,3 +350,49 @@ def test_the_warning_lists_at_most_ten_days(client):
     assert "12 removed rows are dated 2026-09-01, 2026-09-02," in page
     assert "2026-09-10 and 2 more days, days a later import still marks as covered." in page
     assert "2026-09-11" not in page
+
+
+def test_undoing_the_batch_a_row_moved_to_warns_for_an_earlier_batch_of_another_source(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, COFFEE)
+    card = commit(user, account, COFFEE, source=ImportBatch.Source.CAPITAL_ONE)
+    third = commit(user, account, COFFEE)
+    assert (card.duplicate_count, third.duplicate_count) == (1, 1)
+
+    # The row moves past the other-source batch to the third; that batch's copy still has a row.
+    page = undo_page(client, user, account, first.batch)
+    assert rows_by_memo(account) == {("SYNTHETIC COFFEE", "active"): third.batch.pk}
+    assert "still marked as covered" not in page
+
+    # Undoing the third removes the last row the earlier other-source batch relied on.
+    page = undo_page(client, user, account, third.batch)
+
+    assert rows_by_memo(account) == {("SYNTHETIC COFFEE", "archived"): third.batch.pk}
+    assert (
+        "1 removed row dated 2026-09-28 is still marked as covered by the "
+        "Capital One import for 2026-09-01 to 2026-10-31."
+    ) in page
+
+
+def test_undoing_the_batch_a_row_moved_to_warns_for_an_earlier_batch_with_no_record(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, COFFEE)
+    legacy = commit(user, account, COFFEE)
+    third = commit(user, account, COFFEE)
+    # A batch committed before migration 0093 recorded nothing about what it skipped.
+    ImportBatch.objects.filter(pk=legacy.batch.pk).update(skipped_duplicates=None)
+
+    page = undo_page(client, user, account, first.batch)
+    assert rows_by_memo(account) == {("SYNTHETIC COFFEE", "active"): third.batch.pk}
+    assert "still marked as covered" not in page
+
+    page = undo_page(client, user, account, third.batch)
+
+    assert rows_by_memo(account) == {("SYNTHETIC COFFEE", "archived"): third.batch.pk}
+    assert (
+        "1 removed row dated 2026-09-28 is still marked as covered by the "
+        "Huntington Bank import for 2026-09-01 to 2026-10-31."
+    ) in page
+
