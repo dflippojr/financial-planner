@@ -333,12 +333,6 @@ class ImportBatch(ArchivableModel):
     skipped_duplicates = models.JSONField(
         default=dict, null=True, blank=True, validators=(validate_json_object,)
     )
-    # Not stored: undo_import_batch sets both on the batch it returns. The rows
-    # it moved to later batches, and the days of archived rows that a later
-    # batch still covers but could not take.
-    rehomed_count = 0
-    uncovered_days: tuple = ()
-    uncovered_count = 0
     imported_at = models.DateTimeField(auto_now_add=True)
     saved_csv_mapping = models.ForeignKey(
         SavedCsvMapping,

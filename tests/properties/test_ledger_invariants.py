@@ -40,6 +40,7 @@ from .strategies import (
     CAPITAL_ONE,
     HUNTINGTON,
     MAX_MINOR,
+    OFX,
     Row,
     feed_balances,
     feed_currencies,
@@ -132,6 +133,47 @@ def test_undoing_files_leaves_exactly_what_the_remaining_files_hold(case):
                 account=account, status=Transaction.Status.ACTIVE, import_batch__status=ImportBatch.Status.ARCHIVED
             ).exists()
 
+
+@st.composite
+def mixed_source_undo_cases(draw):
+    pool = draw(rows(max_size=5))
+    files = draw(overlapping_files(pool))
+    # Two checking formats that store the same description, so their rows overlap.
+    sources = draw(st.lists(st.sampled_from((HUNTINGTON, OFX)), min_size=len(files), max_size=len(files)))
+    undone = draw(st.lists(st.integers(0, len(files) - 1), unique=True, max_size=len(files)))
+    return list(zip(sources, files, strict=True)), undone
+
+
+@given(mixed_source_undo_cases())
+def test_no_undo_leaves_a_gap_it_did_not_name_across_sources(case):
+    files, undone = case
+    with ledger.isolated():
+        owner, account = _new_member_with_account(HUNTINGTON)
+        batches = [ledger.import_rows(owner, account, shape, file).batch for shape, file in files]
+        named_days = set()
+
+        for done, index in enumerate(undone, start=1):
+            result = undo_import_batch(owner, account.pk, batches[index].pk)
+            for hole in result.holes:
+                assert hole.batch.status == ImportBatch.Status.ACTIVE and hole.batch.pk != batches[index].pk
+                named_days.update(hole.days)
+
+            # A row moves only to a batch of its own source. Where a remaining
+            # file of the other source also holds it, the undo names the day:
+            # every row a remaining file holds is active, or its day was named.
+            expected = Counter()
+            for position, (shape, file) in enumerate(files):
+                if position not in undone[:done]:
+                    expected |= Counter(_key(shape, row) for row in file)
+            active = ledger.content_counter([account])
+            assert not active - expected
+            assert {key[0] for key in expected - active} <= named_days
+            # No row is left active on an undone batch, and none changed source.
+            rows_now = Transaction.objects.filter(account=account, status=Transaction.Status.ACTIVE)
+            assert not rows_now.exclude(import_batch__status=ImportBatch.Status.ACTIVE).exists()
+
+
+# 2. Order doesn't matter.
 
 @st.composite
 def order_cases(draw):

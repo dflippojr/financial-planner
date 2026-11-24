@@ -194,7 +194,7 @@ def test_a_duplicate_another_active_row_still_stands_in_for_is_not_rehomed():
     assert not coffee.filter(import_batch=third.batch).exists()
 
 
-def test_a_batch_never_comes_to_rely_on_a_row_of_a_batch_after_it():
+def test_an_earlier_batch_takes_the_row_when_the_later_batch_it_relied_on_is_undone():
     user, person = make_owner()
     account = make_account(person)
     first = commit(user, account, COFFEE)
@@ -202,15 +202,16 @@ def test_a_batch_never_comes_to_rely_on_a_row_of_a_batch_after_it():
     third = commit(user, account, COFFEE, COFFEE)
     assert (third.new_count, third.duplicate_count) == (1, 1)
 
-    # The third batch's own row must not stand in for the second file's copy:
-    # undoing the third batch next would archive it and leave the second file's row missing.
+    # The third batch's own row stands in for the second file's copy, so the
+    # first batch's row goes to the third, whose file holds two.
     undo_import_batch(user, account.pk, first.batch.pk)
     coffee = Transaction.objects.filter(account=account, status="active")
-    assert coffee.filter(import_batch=second.batch).count() == 1
-    assert coffee.filter(import_batch=third.batch).count() == 1
+    assert coffee.filter(import_batch=third.batch).count() == 2
 
-    undo_import_batch(user, account.pk, third.batch.pk)
+    # The second batch is earlier than the third and still holds the row: it keeps one.
+    result = undo_import_batch(user, account.pk, third.batch.pk)
     assert list(coffee.values_list("import_batch_id", flat=True)) == [second.batch.pk]
+    assert (result.rehomed_count, result.holes) == (1, ())
 
 
 def test_reimporting_an_undone_file_counts_the_rehomed_rows_as_duplicates():
@@ -298,8 +299,8 @@ def test_undo_warns_with_the_days_when_a_later_batch_from_before_the_record_cove
         ("SYNTHETIC BAKERY", "active"): later.batch.pk,
     }
     assert (
-        "1 removed row is dated 2026-09-28, a day a later import still marks as covered. "
-        "Import that later file again to restore any row it also holds."
+        "1 removed row dated 2026-09-28 is still marked as covered by the Huntington Bank import "
+        "for 2026-09-28 to 2026-09-30. Import that file again to restore it."
     ) in page
     assert "2026-09-27" not in page and "2026-10-02" not in page
 
@@ -321,8 +322,8 @@ def test_undo_warns_instead_of_rehoming_to_a_batch_from_another_source(client):
         ("SYNTHETIC FUEL", "active"): later.batch.pk,
     }
     assert (
-        "2 removed rows are dated 2026-09-27 and 2026-09-28, days a later import still marks as covered. "
-        "Import that later file again to restore any rows it also holds."
+        "2 removed rows dated 2026-09-27 and 2026-09-28 are still marked as covered by the Capital One import "
+        "for 2026-09-01 to 2026-10-31. Import that file again to restore them."
     ) in page
     assert not TransactionCorrectionHistory.objects.exists()
 
@@ -335,7 +336,7 @@ def test_undo_does_not_warn_when_nothing_later_covers_the_removed_rows(client):
 
     page = undo_page(client, user, account, first.batch)
 
-    assert "still marks as covered" not in page
+    assert "still marked as covered" not in page
 
 
 def test_the_warning_lists_at_most_ten_days(client):
@@ -347,8 +348,8 @@ def test_the_warning_lists_at_most_ten_days(client):
 
     page = undo_page(client, user, account, first.batch)
 
-    assert "12 removed rows are dated 2026-09-01, 2026-09-02," in page
-    assert "2026-09-10 and 2 more days, days a later import still marks as covered." in page
+    assert "12 removed rows dated 2026-09-01, 2026-09-02," in page
+    assert "2026-09-10 and 2 more days are still marked as covered by the Capital One import" in page
     assert "2026-09-11" not in page
 
 
