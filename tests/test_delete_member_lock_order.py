@@ -701,3 +701,39 @@ def test_grid_a_pair_committed_after_the_exits_lookup_restarts_the_deletion():
     assert member_private.pk not in attempts[0][0]
     assert not Person.objects.filter(pk=leaver.pk).exists()
     assert TransferPair.objects.filter(leg_a=out_leg).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grid_a_default_mapping_reference_committed_after_the_reread_restarts_the_deletion():
+    """Review r6 F1 on #811: clearing the defaults of a mapping the deletion removes must not write an unheld account.
+
+    The leaver saved a mapping in a household nobody is current in any more, so
+    the deletion removes it. After the re-read, another connection makes it the
+    default of a former member's account C (C < the leaver's account). The
+    deletion's cleanup would clear C's default with an UPDATE, a row lock
+    outside its first pass, so it starts again with C in that pass.
+    """
+    from finance.csv_import.saved_mappings import save_csv_mapping
+    from finance.models import SavedCsvMapping
+
+    _require_postgres()
+    leaver = make_person("leaver")
+    former = make_person("former")
+    make_household(leaver, former)
+    former_account = make_account(former, name="Former Checking")
+    private = make_account(leaver, name="Leaver Checking")
+    assert former_account.pk < private.pk
+    mapping = save_csv_mapping(leaver, name="Synthetic store", headers=["When", "Memo", "Amount", "Currency"],
+                               mapping=_synthetic_mapping())
+    leave_household(former)
+    leave_household(leaver)
+
+    def make_it_a_default():
+        Account.objects.filter(pk=former_account.pk).update(default_saved_csv_mapping=mapping)
+
+    attempts = _run_deletion_with(leaver, "_handover_lent_accounts", make_it_a_default)
+
+    _assert_restarted_with_one_first_pass(attempts, {former_account.pk, private.pk})
+    assert former_account.pk not in attempts[0][0]
+    assert not SavedCsvMapping.objects.filter(pk=mapping.pk).exists()
+    assert Account.objects.get(pk=former_account.pk).default_saved_csv_mapping_id is None

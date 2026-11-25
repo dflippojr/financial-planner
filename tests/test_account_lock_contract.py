@@ -330,6 +330,81 @@ def _locks():
         yield from _scan_source(relative.as_posix(), path.read_text(encoding="utf-8"))
 
 
+WRITE_METHODS = ("update", "delete", "bulk_update")
+
+
+def _account_accessors(account):
+    """Reverse accessor names on other models that return Account querysets (household.accounts, ...)."""
+    names = set()
+    for field in account._meta.get_fields():
+        if field.is_relation and field.many_to_one and field.concrete and field.remote_field is not None:
+            names.add(field.remote_field.get_accessor_name())
+    return names
+
+
+def _scan_writes(relative, source):
+    """Yield (module, function, line, method) for each Account queryset write in one module's source.
+
+    Owner decision on review r6 of #811: an UPDATE or DELETE on accounts takes
+    their row locks too, so it goes through finance.account_locks.update_accounts
+    or delete_accounts and the member-deletion guard. A write counts when its
+    receiver resolves to Account (as for locks) or goes through a reverse
+    accessor that returns accounts (`household.accounts.update(...)`).
+    """
+    tree = ast.parse(source)
+    module = _Module(tree)
+    accessors = _account_accessors(module.account)
+    enclosing = {}
+    for function in ast.walk(tree):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for inner in ast.walk(function):
+                enclosing[id(inner)] = function
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in WRITE_METHODS):
+            continue
+        function = enclosing.get(id(node))
+        model, _calls = _receiver(module, node.func.value, _local_assignments(function))
+        _calls, attributes, _root = _chain(node.func.value)
+        if model is module.account or (model is None and accessors & set(attributes)):
+            yield relative, function.name if function is not None else "<module>", node.lineno, node.func.attr
+
+
+def _writes():
+    for path in sorted((ROOT / "finance").rglob("*.py")):
+        relative = path.relative_to(ROOT)
+        if "migrations" in relative.parts or relative == HELPER:
+            continue
+        yield from _scan_writes(relative.as_posix(), path.read_text(encoding="utf-8"))
+
+
+def test_account_rows_are_written_only_through_the_guarded_helpers():
+    offending = [f"{module}:{line} in {function} ({method})" for module, function, line, method in _writes()]
+    assert offending == [], (
+        "Write Account rows with finance.account_locks.update_accounts or delete_accounts:\n" + "\n".join(offending)
+    )
+
+
+WRITE_CASES = {
+    "Account.objects.filter(pk=1).update(name='x')": ["update"],
+    "BankAccount.objects.filter(owner=person).delete()": ["delete"],
+    "household.accounts.update(scope='private')": ["update"],
+    "Account.objects.bulk_update(rows, ['name'])": ["bulk_update"],
+    "Transaction.objects.filter(account_id=1).update(note='x')": [],
+    "row.delete()": [],
+}
+
+
+@pytest.mark.parametrize("expression", sorted(WRITE_CASES))
+def test_the_write_scanner_classifies_each_shape(expression):
+    source = (
+        "from finance.models import Account, Transaction\n"
+        "from finance.models import Account as BankAccount\n"
+        "def write(person, household, rows, row):\n    return " + expression + "\n"
+    )
+    found = [method for _module, _function, _line, method in _scan_writes("finance/new_service.py", source)]
+    assert found == WRITE_CASES[expression]
+
+
 def test_account_rows_are_locked_only_through_lock_accounts():
     offending = [
         f"{module}:{line} in {function} ({kind})"
@@ -369,6 +444,7 @@ SCANNER_CASES = {
     "Transaction.objects.select_for_update(of=OF).first()": "possible joined account",
     "Transaction.objects.select_for_update().select_related().first()": "possible joined account",
     "qs.select_for_update()": "generic",
+    "Transaction.objects.filter(condition).select_for_update().first()": "possible joined account",
     "Unknown.objects.select_for_update()": "generic",
 }
 ALLOWED_SHAPES = (
@@ -382,7 +458,7 @@ PREAMBLE = "from finance import models\nfrom finance.models import Account, Budg
 
 
 def _kinds(expression):
-    source = PREAMBLE + "def lock():\n    return " + expression + "\n"
+    source = PREAMBLE + "def lock(condition):\n    return " + expression + "\n"
     return [kind for _module, _function, _line, kind in _scan_source("finance/new_service.py", source)]
 
 
@@ -394,6 +470,27 @@ def test_the_scanner_classifies_each_lock_shape(expression):
 @pytest.mark.parametrize("expression", ALLOWED_SHAPES)
 def test_the_scanner_accepts_locks_that_cannot_reach_an_account(expression):
     assert _kinds(expression) == []
+
+
+def test_the_scanner_resolves_a_predicate_held_in_a_variable():
+    """Review r6 F2 on #811: a Q built earlier in the function is a join source, not a value."""
+    source = PREAMBLE + (
+        "from django.db.models import Q\n"
+        "def lock():\n"
+        "    condition = Q(account__owner_id=1)\n"
+        "    return Transaction.objects.filter(condition).select_for_update().first()\n"
+        "def widened():\n"
+        "    condition = Q(status='active')\n"
+        "    condition |= Q(account__household_id=2)\n"
+        "    return Transaction.objects.select_for_update().filter(condition).first()\n"
+        "def safe():\n"
+        "    condition = Q(category__name='x')\n"
+        "    return Budget.objects.select_for_update().filter(condition).first()\n"
+        "def given(condition):\n"
+        "    return Budget.objects.select_for_update().filter(condition).first()\n"
+    )
+    found = {function: kind for _module, function, _line, kind in _scan_source("finance/new_service.py", source)}
+    assert found == {"lock": "joined account", "widened": "joined account", "given": "possible joined account"}
 
 
 def test_the_scanner_follows_a_queryset_built_earlier_in_the_function():
