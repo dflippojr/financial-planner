@@ -512,17 +512,22 @@ def test_a_path_that_cannot_be_resolved_is_refused(tmp_path):
     assert rehearsal.under_directory(str(tmp_path / "x"), str(tmp_path / "loop")) is False
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can read every directory, so no part of a path is unreadable")
-def test_a_path_through_a_directory_that_cannot_be_read_is_refused(tmp_path):
+def test_a_path_through_a_directory_that_cannot_be_read_is_refused(tmp_path, monkeypatch):
     # What is behind it cannot be examined, and Docker, as root, would follow a link there.
     closed = tmp_path / "work" / "closed"
     closed.mkdir(parents=True)
-    closed.chmod(0)
-    try:
-        assert rehearsal.canonical_path(str(closed / "backups")) is None
-        assert rehearsal.under_directory(str(closed / "backups"), str(tmp_path / "work")) is False
-    finally:
-        closed.chmod(0o700)
+    lstat = os.lstat
+
+    def refusing(path, *arguments, **options):
+        if os.fspath(path).startswith(str(closed) + os.sep):
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return lstat(path, *arguments, **options)
+
+    monkeypatch.setattr(rehearsal.os, "lstat", refusing)
+
+    assert rehearsal.canonical_path(str(closed / "backups")) is None
+    assert rehearsal.under_directory(str(closed / "backups"), str(tmp_path / "work")) is False
+    assert rehearsal.under_directory(str(closed), str(tmp_path / "work")) is True
 
 
 def test_a_sibling_whose_name_ends_in_a_backslash_is_outside_the_work_directory(tmp_path):
