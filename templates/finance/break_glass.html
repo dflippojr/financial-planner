@@ -2,7 +2,7 @@
 {% block title %}Break-glass sign-in · Financial Planner{% endblock %}
 {% block content %}
 <h1 class="mb-2 text-2xl font-bold">Break-glass sign-in</h1>
-<p class="mb-4">This one-time link was issued on the host. It signs you in once without Google. After signing in, check Google under Sign-in &amp; security.</p>
+<p class="mb-4">This one-time link was issued on the host. It signs you in once and signs you out on every other device. After signing in, check Google under Sign-in &amp; security.</p>
 <form method="post">
   {% csrf_token %}
   <button type="submit" class="btn btn-primary w-full">Sign in</button>

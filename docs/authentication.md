@@ -32,7 +32,7 @@ The OAuth handshake uses `state` and PKCE. The app does not store Google access 
 
 ## Production mode: Google-only sign-in
 
-`GOOGLE_ONLY_SIGN_IN=true` turns on production mode (#792, owner decision 2026-11-24 on #750). It is off by default, so development, tests and a deployment that has not set it behave as described in the rest of this page. The app refuses to start with it on unless `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are both set.
+`GOOGLE_ONLY_SIGN_IN=true` turns on production mode (#792, owner decision 2026-11-24 on #750). It is off by default, so development, tests and a deployment that has not set it behave as described in the rest of this page. The accepted values are `true` and `false` in any letter case; left unset or empty it is off. The app refuses to start with any other value, so a typo cannot leave passwords on unnoticed, and refuses to start with it on unless `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are both set.
 
 In production mode Google is the only way in, from the public address, the tailnet and loopback alike:
 
@@ -47,7 +47,7 @@ Before turning production mode on, every member must have connected Google on **
 
 ### Break-glass
 
-A member who cannot sign in with Google (a lost or compromised Google account, or Google sign-in being unavailable) regains access through a management command run on the host. There is no password form and no other fallback.
+A member who cannot sign in (a lost or compromised Google account, Google sign-in being unavailable, or with passwords on a lost password and no recovery code) regains access through a management command run on the host. The command works with production mode on or off (owner decision 2026-11-25 on #792). In production mode there is no password form and no other fallback.
 
 ```console
 python manage.py break_glass_sign_in --username USERNAME
@@ -57,10 +57,11 @@ python manage.py break_glass_sign_in --username USERNAME --unlink-google
 The command prints a one-time path, `/break-glass/<token>/`. Add it to the app's tailnet address, for example `https://basement-pc.example-tailnet.ts.net/break-glass/<token>/`, open it, and press **Sign in**. That signs the member in with a normal session, counts as a fresh confirmation, and lands on **Sign-in & security**.
 
 - With `--unlink-google` the command also removes the member's Google link (recorded as a Google disconnect in the audit trail), so the member can **Connect Google** with another Google account after signing in. Connect it within ten minutes of signing in: after that the app asks for a fresh confirmation, which a member with no Google link and no passkey cannot give, and a new link is needed. Without it the link is left alone, which is right when Google was only unavailable.
+- Issuing a link signs the member out everywhere: every existing session ends and any unfinished sign-in is dropped, in the same transaction that creates the link and removes the Google link. Using the link does the same again before it starts the new session, so that session is the member's only one. Other members are not affected.
 - The link expires after 15 minutes and works once. Opening it changes nothing until **Sign in** is pressed. Issuing a new link for the same member cancels the earlier one.
 - The database holds only a keyed digest of the token. Treat the printed path as a secret until it is used.
-- The link is refused for any request that carries `CF-Connecting-IP`. Cloudflare adds that header to every request it forwards and a visitor cannot remove it, so the link works over the tailnet or loopback, never through the public tunnel. Every refusal (unknown, expired, used, public, or production mode off) is the same 404, and wrong tokens count toward the per-address throttle.
-- The command works only in production mode and only for an existing member. It is recorded in the operator journal, and the member's security events show **Break-glass sign-in link issued on the host** and **Signed in with a break-glass link**.
+- The link is refused for any request that carries `CF-Connecting-IP`. Cloudflare adds that header to every request it forwards and a visitor cannot remove it, so the link works over the tailnet or loopback, never through the public tunnel. Every refusal (unknown, expired, used or public) is the same 404, and wrong tokens count toward the per-address throttle.
+- The command works only for an existing member. It does not set or change a password. It is recorded in the operator journal, and the member's security events show **Break-glass sign-in link issued on the host** and **Signed in with a break-glass link**.
 
 ## Passkeys
 

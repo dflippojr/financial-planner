@@ -112,15 +112,15 @@ Run the Bash commands from the deployed checkout, for example `/path/to/financia
 
 ## Production mode and break-glass
 
-Set `GOOGLE_ONLY_SIGN_IN=true` in `production.env` once Google sign-in works and every member has connected Google, then recreate the app container the same way as for `SETUP_CODE`. Google is then the only way in and no password is accepted anywhere; [authentication](authentication.md#production-mode-google-only-sign-in) lists what changes. The app refuses to start with the flag on while `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` is empty. To go back, set it to `false` and recreate the app; stored passwords and recovery codes work again.
+Set `GOOGLE_ONLY_SIGN_IN=true` in `production.env` once Google sign-in works and every member has connected Google, then recreate the app container the same way as for `SETUP_CODE`. Google is then the only way in and no password is accepted anywhere; [authentication](authentication.md#production-mode-google-only-sign-in) lists what changes. The app refuses to start with the flag on while `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` is empty, and with any value other than `true` or `false`. To go back, set it to `false` and recreate the app; stored passwords and recovery codes work again.
 
-When a member cannot sign in with Google, run the break-glass command on the basement PC:
+When a member cannot sign in, run the break-glass command on the basement PC. It works with production mode on or off:
 
 ```bash
 docker compose --env-file "$Config" exec app python manage.py break_glass_sign_in --username USERNAME
 ```
 
-It prints a one-time path such as `/break-glass/<token>/`. Open it on the tailnet address (`https://basement-pc.example-tailnet.ts.net/break-glass/<token>/`) within 15 minutes and press **Sign in**. Add `--unlink-google` when the member's Google account is lost or compromised, so they can connect another one on **Sign-in & security** after signing in. The link works once, a new link cancels the earlier one, and it is refused through the public tunnel: a request that carries `CF-Connecting-IP` gets 404. The tunnel should also block `/break-glass/` (#794). The printed path is a secret until used; do not paste it into an issue or a chat.
+It prints a one-time path such as `/break-glass/<token>/`. Open it on the tailnet address (`https://basement-pc.example-tailnet.ts.net/break-glass/<token>/`) within 15 minutes and press **Sign in**. Add `--unlink-google` when the member's Google account is lost or compromised, so they can connect another one on **Sign-in & security** after signing in. Running the command signs the member out on every device, and using the link does so again before it starts the new session. The link works once, a new link cancels the earlier one, and it is refused through the public tunnel: a request that carries `CF-Connecting-IP` gets 404. The tunnel should also block `/break-glass/` (#794). The printed path is a secret until used; do not paste it into an issue or a chat.
 
 `TRUSTED_PROXY_IPS` must include the address the cloudflared connector connects from (#794 sets it up). From a listed address the app takes the visitor's address from `CF-Connecting-IP`, and without that header from the right-most `X-Forwarded-For` hop; from any other address it ignores both. When cloudflared runs on the host and reaches the loopback-published port, it arrives from the same compose gateway as Tailscale Serve, which the default `default-gateway` already lists.
 

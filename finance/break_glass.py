@@ -1,10 +1,11 @@
-"""Break-glass sign-in for production mode (#792).
+"""Break-glass sign-in (#792).
 
-With GOOGLE_ONLY_SIGN_IN on, no password is accepted anywhere. A member who
-cannot sign in with Google gets back in through a one-time link that
-`manage.py break_glass_sign_in` prints on the host. Only a keyed digest of the
-link's token is stored, the link expires after BREAK_GLASS_TTL, works once,
-and a newer link for the same member replaces the earlier one.
+A member who cannot sign in gets back in through a one-time link that
+`manage.py break_glass_sign_in` prints on the host, with production mode
+(GOOGLE_ONLY_SIGN_IN) on or off. Only a keyed digest of the link's token is
+stored, the link expires after BREAK_GLASS_TTL, works once, and a newer link
+for the same member replaces the earlier one. Issuing a link and using it
+each end the member's earlier sessions and unfinished sign-ins.
 """
 
 import hashlib
@@ -13,12 +14,13 @@ import secrets
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
-from .auth_services import throttle_key
+from .auth_services import revoke_user_sessions, throttle_key
 from .google_auth import lock_member_for_sign_in_change, unlink_google_for_break_glass
-from .models import BreakGlassGrant
+from .models import BreakGlassGrant, Person
 from .security_services import EVENT_TYPES, record_security_event
 
 BREAK_GLASS_TTL = timedelta(minutes=15)
@@ -33,9 +35,22 @@ def _token_digest(token):
     return hmac.new(settings.SECRET_KEY.encode(), f"break-glass:{token or ''}".encode(), hashlib.sha256).hexdigest()
 
 
+def _end_member_sessions(locked_user):
+    """Sign the locked member out everywhere and drop their unfinished sign-ins.
+
+    The cutoff also ends a session that is not in the session index. A session
+    started after this call is stamped later than the cutoff and stays valid.
+    """
+    Person.objects.filter(user_id=locked_user.pk).update(sessions_valid_after=timezone.now())
+    revoke_user_sessions(locked_user)
+
+
 @transaction.atomic
 def issue_break_glass_token(user, *, unlink_google=False):
-    """Return a new one-time token for the member, replacing any earlier one."""
+    """Return a new one-time token for the member, replacing any earlier one.
+
+    In the same transaction the member is signed out everywhere.
+    """
     locked = lock_member_for_sign_in_change(user)
     BreakGlassGrant.objects.filter(user=locked).delete()
     token = secrets.token_urlsafe(32)
@@ -44,6 +59,7 @@ def issue_break_glass_token(user, *, unlink_google=False):
     )
     if unlink_google:
         unlink_google_for_break_glass(locked)
+    _end_member_sessions(locked)
     record_security_event(locked, EVENT_TYPES.BREAK_GLASS_ISSUED)
     return token
 
@@ -66,10 +82,20 @@ def locked_grant_for_redeeming(token):
 
 @transaction.atomic
 def redeem_break_glass_token(token):
-    """Use the token up and return its member, or None when it is not usable."""
+    """Use the token up and return its member, or None when it is not usable.
+
+    In the same transaction the member is signed out everywhere, so the session
+    the caller starts next is their only one.
+    """
+    user_id = _usable_grants(token).values_list("user_id", flat=True).first()
+    if user_id is None or not Person.objects.filter(user_id=user_id).exists():
+        return None
+    # Same lock order as issuing: the member first, then the grant.
+    locked = lock_member_for_sign_in_change(get_user_model().objects.get(pk=user_id))
     grant = locked_grant_for_redeeming(token).first()
-    if grant is None or not hasattr(grant.user, "person"):
+    if grant is None:
         return None
     grant.used_at = timezone.now()
     grant.save(update_fields=("used_at",))
-    return grant.user
+    _end_member_sessions(locked)
+    return locked

@@ -278,8 +278,13 @@ Owner decisions (owner card 2026-11-24 on #750):
 Defaults recorded with the decisions (owner may change):
 - Production mode is the `GOOGLE_ONLY_SIGN_IN` setting, off by default. It supersedes "Google and passwords both stay" above only while it is on.
 - "No password login" covers every place a password is accepted: sign-in, confirmation of a sensitive action, join, first-run setup, account recovery (which only sets a password) and the passkey step after a password. Members cannot add a password or disconnect Google while it is on.
-- The break-glass command prints a one-time link (15 minutes, single use, digest only at rest) that signs one member in. It is refused for requests that came through Cloudflare, so it works on the tailnet only. `--unlink-google` also removes the member's Google link so they can connect another account. This replaces "There is no admin/CLI reset path" for production mode only.
-- The app refuses to start in production mode without Google credentials.
+- The break-glass command prints a one-time link (15 minutes, single use, digest only at rest) that signs one member in. It is refused for requests that came through Cloudflare, so it works on the tailnet only. `--unlink-google` also removes the member's Google link so they can connect another account. This replaces "There is no admin/CLI reset path".
+- The app refuses to start in production mode without Google credentials, and with a `GOOGLE_ONLY_SIGN_IN` value other than `true`, `false` or empty.
+
+Owner decisions on the defaults above (2026-11-25 on #792, relayed by the liaison):
+- Approved: the one-time sign-in link; no passwords anywhere in Google-only mode (recovery off, no adding a password, Google cannot be disconnected); the link is refused through the tunnel (`CF-Connecting-IP`).
+- Changed: the break-glass command works in both modes, not only in Google-only mode.
+- Issuing a break-glass link, and using it, each sign the member out everywhere and drop their unfinished sign-ins.
 
 ## Interface styling decisions (2026-10-01)
 

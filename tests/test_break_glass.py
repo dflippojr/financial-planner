@@ -298,6 +298,21 @@ def test_using_a_link_ends_a_session_started_after_it_was_issued():
 
 @pytest.mark.django_db
 @_google_only()
+def test_a_browser_that_was_signed_in_can_use_the_link_itself():
+    user, _person, _household = make_member()
+    browser = _signed_in_without_passkey(user)
+    stale_key = browser.session.session_key
+    path, _token = _issue(user.username)
+
+    assert browser.post(path).status_code == 302
+
+    assert browser.session.session_key != stale_key
+    assert browser.session["_auth_user_id"] == str(user.pk)
+    assert browser.get(reverse("home")).status_code == 200
+
+
+@pytest.mark.django_db
+@_google_only()
 def test_a_refused_link_leaves_the_members_sessions_alone():
     user, _person, _household = make_member()
     _issue(user.username)

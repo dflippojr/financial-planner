@@ -46,7 +46,6 @@ from .break_glass import break_glass_throttle_key, break_glass_token_is_usable, 
 from .google_auth import (
     GOOGLE_ONLY_NOTICE,
     disconnect_google_account,
-    google_only_sign_in,
     google_signin_enabled,
     google_throttle_key,
     has_usable_google_sign_in,
@@ -639,7 +638,7 @@ def break_glass(request, token):
     and is refused: the link works on the tailnet only. Every refusal is the
     same 404.
     """
-    if not google_only_sign_in() or "HTTP_CF_CONNECTING_IP" in request.META:
+    if "HTTP_CF_CONNECTING_IP" in request.META:
         raise Http404()
     key = break_glass_throttle_key(client_ip(request))
     if login_is_blocked(key):

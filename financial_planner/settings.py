@@ -30,7 +30,11 @@ def allowed_hosts_from_env(value):
 
 
 def google_only_sign_in_from_env(value, client_id, client_secret):
-    enabled = (value or "").strip().lower() == "true"
+    text = (value or "").strip().lower()
+    if text not in ("", "true", "false"):
+        # A typo must not leave passwords on without anybody noticing.
+        raise ImproperlyConfigured("GOOGLE_ONLY_SIGN_IN must be true or false, or left unset.")
+    enabled = text == "true"
     if enabled and not (client_id and client_secret):
         raise ImproperlyConfigured(
             "GOOGLE_ONLY_SIGN_IN is on, but GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not both set: "
