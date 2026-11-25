@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Read-only production signals for docs/production-signals.md and ops/post-deploy-check.ps1.
+"""Read-only production signals for docs/production-signals.md and ops/post-deploy-check.py.
 
 Both subcommands print one JSON object of counts, types, states and timestamps.
 Log lines, error text, amounts and names never reach the output.
 
     python scripts/prod_signals.py tracebacks --container ID --since 24h
     python scripts/prod_signals.py tracebacks --stdin < synthetic.log
-    python scripts/prod_signals.py backup-status E:/financial-planner-backups/health/status
+    python scripts/prod_signals.py backup-status /path/to/financial-planner-backups/health/status
 
-It needs only the standard library, so it runs on the Windows host without the
+It needs only the standard library, so it runs on the Linux host without the
 app's dependencies.
 """
 import argparse

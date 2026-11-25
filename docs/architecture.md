@@ -22,8 +22,8 @@ Updated: 2026-09-27. Records the stack and deployment decisions for issue #2. Ow
 
 ## Deployment (basement PC)
 
-- Basement PC runs Windows with Docker Desktop (WSL2 backend), per owner decision.
-- A `docker-compose` stack runs: the Django app (behind gunicorn), PostgreSQL with a named volume for durable storage, and a scheduled backup job. Docker's `restart: unless-stopped` policy handles process supervision; Docker Desktop is configured to start at Windows boot.
+- Basement PC runs Linux with Docker Engine and the Compose plugin (owner decision 2026-11-24, #613). See the current [deployment runbook](deployment.md).
+- A `docker compose` stack runs the Django app (behind Gunicorn), PostgreSQL with a named volume for durable storage, scheduled backups, and the background worker. Docker's `restart: unless-stopped` policy handles process supervision; Docker and Tailscale start at Linux boot without an interactive sign-in.
 - Network exposure: the app is reached over Tailscale using `tailscale serve`, which terminates HTTPS with Tailscale's own certificates. The app listens on plain HTTP inside the container; `tailscale serve` reverse-proxies HTTPS to it. Plain-HTTP LAN access outside the tailnet is not provided in the first release, since Tailscale already reaches every household device on the home network. Revisit if a household member needs access from a device that can't run Tailscale.
 - Backup and restore approach (detailed schedule and retention in issue #11): nightly logical backups (`pg_dump`) written to a second local disk on the basement PC. Restore is `pg_restore` into a fresh Postgres volume. This is an approach, not the final schedule/retention policy, which #11 will pin down.
 

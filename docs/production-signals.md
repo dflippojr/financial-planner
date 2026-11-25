@@ -1,7 +1,7 @@
 # Production signals
 
 How to read the tower's production state without changing it. The post-deploy
-check (`ops/post-deploy-check.ps1`) uses these commands, and an operator can run
+check (`ops/post-deploy-check.py`) uses these commands, and an operator can run
 them by hand. The box-level signal sweep (dflippojr/agent-ops#52, `ao signals`)
 reads only the [`production-signals` block](#signals-the-sweep-reads) at the
 end of this page; the other checks stay owner-run.
@@ -12,15 +12,15 @@ states, counts, exception types, timestamps and SHAs. Do not add a signal that
 breaks either rule. In particular, never paste raw `docker logs` output into an
 issue; count it with `scripts/prod_signals.py` instead.
 
-Run them in Windows PowerShell 5.1 from the deployed checkout on the tower.
-`scripts/prod_signals.py` needs only the standard library, so the host's
-`python` runs it. Set these first:
+Run these Bash commands from the deployed checkout on Linux, for example
+`/path/to/financial-planner`. The helpers need only host Python 3.10+ and its
+standard library. Substitute protected host paths and the tailnet URL:
 
-```powershell
-$Project = 'financial-planner'
-$HealthUrl = 'https://BASEMENT-PC.MAGICDNS-NAME:10443/health/'
-$BackupDir = 'D:\financial-planner-backups'   # BACKUP_DIR from production.env
-$Config = 'D:\financial-planner-config\production.env'
+```bash
+Project='financial-planner'
+HealthUrl='https://BASEMENT-PC.MAGICDNS-NAME:10443/health/'
+BackupDir='/path/to/financial-planner-backups'  # BACKUP_DIR from production.env
+Config='/path/to/financial-planner-config/production.env'
 ```
 
 | Signal | Healthy | Fresh as of | Read by |
@@ -34,30 +34,34 @@ $Config = 'D:\financial-planner-config\production.env'
 
 ## Health
 
-```powershell
-$r = Invoke-WebRequest -UseBasicParsing $HealthUrl
-"$($r.StatusCode) $($r.Headers['X-App-Revision'])"
+```bash
+curl --fail --silent --show-error --output /dev/null --dump-header - "$HealthUrl" |
+  awk 'tolower($1) ~ /^http\// || tolower($1) == "x-app-revision:"'
 ```
 
 `/health/` runs `SELECT 1` and answers `ok` (200) or `unavailable` (503), with
-no error details. On a 503, or when the app is down, `Invoke-WebRequest`
-throws instead of printing; that is the signal. Its `X-App-Revision` header is the first 12 hex digits of the
-commit the app image was built from, or `unknown` for an image built without
-`GIT_SHA` (see [deployment](deployment.md#upgrades-and-migrations)). Nothing
-else about the build is exposed.
+no error details. Curl reports a failed HTTP status or connection on stderr;
+the filtered headers show only the status and revision. Its `X-App-Revision`
+header is the first 12 hex digits of the commit the app image was built from,
+or `unknown` without `GIT_SHA` (see [deployment](deployment.md#upgrades-and-migrations)).
 
 ## Deployed SHA, container state and restarts
 
-```powershell
-docker ps -aq --filter "label=com.docker.compose.project=$Project" --filter label=com.docker.compose.oneoff=False |
-  ForEach-Object { (docker inspect $_) -join "`n" | ConvertFrom-Json } |
-  ForEach-Object { [pscustomobject]@{
-      Service      = $_.Config.Labels.'com.docker.compose.service'
-      State        = $_.State.Status
-      RestartCount = $_.RestartCount
-      StartedAt    = $_.State.StartedAt
-      Revision     = $_.Config.Labels.'org.opencontainers.image.revision' } } |
-  Sort-Object Service | Format-Table -AutoSize
+```bash
+python3 - "$Project" <<'PYTHON'
+import json, subprocess, sys
+ids = subprocess.check_output([
+    "docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={sys.argv[1]}",
+    "--filter", "label=com.docker.compose.oneoff=False",
+], text=True).split()
+for cid in ids:
+    c = json.loads(subprocess.check_output(["docker", "inspect", cid], text=True))[0]
+    labels = c["Config"]["Labels"] or {}
+    print(json.dumps({"Service": labels.get("com.docker.compose.service"),
+        "State": c["State"]["Status"], "RestartCount": c["RestartCount"],
+        "StartedAt": c["State"]["StartedAt"],
+        "Revision": labels.get("org.opencontainers.image.revision")}))
+PYTHON
 ```
 
 Expect `db`, `app`, `backup` and `background`, each `running`, and the one-shot `config-check` `exited`. A `background` that is `created` but never ran means `config-check` refused a setting, such as an invalid `SIMPLEFIN_SYNC_CRON` (#560): `docker compose logs config-check` names it, and so does a second line on `/health/`. The `oneoff` filter leaves out containers that `docker compose run` left behind. `RestartCount`
@@ -73,11 +77,15 @@ older SHA after a deploy was not recreated; the deployment runbook covers that.
 
 ## Tracebacks in the last 24 hours
 
-```powershell
-foreach ($Service in 'db', 'app', 'backup', 'background') {
-  $Id = docker ps -aq --filter "label=com.docker.compose.project=$Project" --filter "label=com.docker.compose.service=$Service" --filter label=com.docker.compose.oneoff=False | Select-Object -First 1
-  "$Service $(python scripts\prod_signals.py tracebacks --container $Id --since 24h)"
-}
+```bash
+for Service in db app backup background; do
+  while IFS= read -r Id; do
+    [ -n "$Id" ] || continue
+    printf '%s ' "$Service"
+    python3 scripts/prod_signals.py tracebacks --container "$Id" --since 24h
+  done < <(docker ps -aq --filter "label=com.docker.compose.project=$Project" \
+    --filter "label=com.docker.compose.service=$Service" --filter label=com.docker.compose.oneoff=False)
+done
 ```
 
 Each line is the service and a JSON object such as
@@ -93,8 +101,8 @@ container recreated within the window shows only its own part of it.
 
 ## Backup status
 
-```powershell
-python scripts\prod_signals.py backup-status (Join-Path $BackupDir 'health\status')
+```bash
+python3 scripts/prod_signals.py backup-status "$BackupDir/health/status"
 ```
 
 `ops/backup/backup.sh` writes this file after each run. The helper prints its
@@ -113,12 +121,15 @@ These are the same limits that raise the in-app backup alert
 
 ## Balance reconciliation
 
-```powershell
-$Recon = docker compose --env-file $Config exec -T app python manage.py reconcile_balances --json
-$Code = $LASTEXITCODE
-($Recon | ConvertFrom-Json) | Select-Object accounts, counts | ConvertTo-Json -Compress
-$Code
+```bash
+Recon="$(docker compose --env-file "$Config" exec -T app python manage.py reconcile_balances --json)"
+Code=$?
+printf '%s' "$Recon" | python3 -c 'import json, sys; r=json.load(sys.stdin); print(json.dumps({k:r[k] for k in ("accounts", "counts")}))'
+printf 'exit %s\n' "$Code"
 ```
+
+Capture the command's exit code immediately (in an interactive shell without
+`set -e`); the filtered JSON contains only counts.
 
 `reconcile_balances` compares each account's transactions with the
 bank-reported balances, read-only. The command's own `--json` output has three
@@ -133,7 +144,7 @@ the command after each SimpleFIN sync and raises the in-app alert; see
 
 ## Post-deploy check
 
-`ops/post-deploy-check.ps1` combines these signals into a pass or fail right
+`ops/post-deploy-check.py` combines these signals into a pass or fail right
 after a deploy. The deployment runbook runs it; see
 [Upgrades and migrations](deployment.md#upgrades-and-migrations). It fails, with
 one line per reason, when:
@@ -144,7 +155,7 @@ one line per reason, when:
   window, or has restarted since the deploy (by `RestartCount`, its start
   time, and for a new container its `start` events and a set `FinishedAt`,
   which also catch a manual restart);
-- the evidence for those start counts is missing: with `-EventLog`, the
+- the evidence for those start counts is missing: with `--event-log`, the
   deploy-time event log is missing, does not reach a new container's creation,
   has no start for a running container, or its last start for a container is
   older than `StartedAt` (the recorder stopped before a later restart, however
@@ -156,20 +167,26 @@ one line per reason, when:
 - the backup status file is missing or in the `error` state (`stale` is only a
   warning; the nightly alert handles it).
 
-```powershell
-.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart -EventLog $EventLog
+```bash
+python3 ops/post-deploy-check.py --config-path "$Config" --since "$DeployStart" --event-log "$EventLog"
 ```
 
-`$EventLog` is a `docker events` stream of the project's container `create`
+`EventLog` is a `docker events` stream of the project's container `create`
 and `start` events with their times, recorded from before `up -d` as
-[Upgrades and migrations](deployment.md#upgrades-and-migrations) starts it.
-It reads `DJANGO_CSRF_TRUSTED_ORIGINS` (for the health URL) and `BACKUP_DIR`
-from the env file and nothing else. Pass `-HealthUrl`, `-StatusPath`,
-`-ExpectedSha`, `-ProjectName` or `-StableSeconds` to override a default.
-`-SkipRevision` is only for a rollback to a release older than #537, whose
-images record no SHA.
-Without `-Since`, it dates the deploy from when the `app` and `background`
-containers were created.
+[Upgrades and migrations](deployment.md#upgrades-and-migrations) describes.
+Keep its recorder running until the check exits. The check reads only
+`DJANGO_CSRF_TRUSTED_ORIGINS` (for the first origin's health URL) and `BACKUP_DIR`
+from the env file. Pass `--health-url`, `--status-path`, `--expected-sha`,
+`--project-name` or `--stable-seconds` to override defaults. `--since` takes an
+RFC 3339 timestamp with a timezone. Without it, the check dates the deploy from
+the app and background containers' creation, allowing 5 seconds for Compose
+creation skew. `--skip-revision` is only for rollback to images older than
+#537; confirm the checked-out SHA separately.
+
+The check returns 0 with `post-deploy check passed`, or 1 with `FAIL` lines and
+a problem count; healthy checks start `ok`, and stale backups start `warn`.
+Tests import the Python functions directly, so they need neither a daemon nor
+an optional script runtime. The owner performs the first run against production.
 
 ## Signals the sweep reads
 
