@@ -27,6 +27,7 @@ from .models import (
     Account,
     Category,
     Membership,
+    Person,
     RefundLink,
     RefundLinkDrop,
     Transaction,
@@ -301,26 +302,60 @@ def dropped_refund_links(original_ids):
     return links
 
 
-def _restore_drops(link, saved_drops, actor):
-    """Put back the stored drops whose pair still exists and still leaves its legs out.
+def _skipped_drop_readers(link, person_id, pair, person_exists):
+    """Who is told that a saved drop was not restored: the remaining member, never anyone new.
 
-    Owner decision via the liaison on #809: the drops come back as they were,
-    never re-derived under today's viewer rules. A drop whose pair has since
-    been undone, dismissed or deleted is not restored, as unmarking that pair
-    would have cleared it. Each member with a drop gets a "linked" -> "unlinked"
-    history row `only_for` them after the restore's "unlinked" -> "linked" row,
-    as the pair rule writes it, so their history ends unlinked.
+    The member the drop was for, while they exist. Otherwise each current viewer
+    of the refund who sees both legs of the pair, or, once the pair is gone too,
+    who sees the purchase, so no one learns of a pair they could not see.
     """
+    if person_exists:
+        return [person_id]
+    readers = account_viewer_ids(link.refund.account)
+    if pair is not None:
+        readers &= legs_seeing_viewers([pair.leg_a.account, pair.leg_b.account])
+    else:
+        readers &= account_viewer_ids(link.original.account)
+    return sorted(readers)
+
+
+def _restore_drops(link, saved_drops, actor):
+    """Put back each saved drop whose member and pair exist and whose pair is still marked.
+
+    Owner decisions on #809: the drops come back as they were, never re-derived
+    under today's viewer rules, and a drop that cannot come back is skipped
+    visibly. A member given a drop back gets a "linked" -> "unlinked" history
+    row `only_for` them after the restore's "unlinked" -> "linked" row, as the
+    pair rule writes it. A skipped drop gets a `SAVED_DROP_LABEL` row naming the
+    class of reason, `only_for` each reader `_skipped_drop_readers` picks, with
+    no audit event.
+    """
+    if not saved_drops:
+        return
     pair_ids = {pair_id for _person_id, pair_id in saved_drops}
+    existing_people = set(Person.objects.filter(pk__in={pid for pid, _pair in saved_drops}).values_list("pk", flat=True))
+    pairs = {
+        pair.pk: pair
+        for pair in TransferPair.objects.filter(pk__in=pair_ids).select_related(
+            "leg_a__account", "leg_b__account"
+        )
+    }
     still_marked = set(_marked_pairs_touching((link.original_id,)).filter(pk__in=pair_ids).values_list("pk", flat=True))
     restored_for = set()
+    told = set()
     for person_id, pair_id in saved_drops:
-        if pair_id not in still_marked:
+        person_exists = person_id in existing_people
+        if person_exists and pair_id in still_marked:
+            RefundLinkDrop.objects.create(link=link, person_id=person_id, pair_id=pair_id)
+            if person_id not in restored_for:
+                restored_for.add(person_id)
+                _record_member_link_history(link.refund, actor, person_id, "linked", "unlinked")
             continue
-        RefundLinkDrop.objects.create(link=link, person_id=person_id, pair_id=pair_id)
-        if person_id not in restored_for:
-            restored_for.add(person_id)
-            _record_member_link_history(link.refund, actor, person_id, "linked", "unlinked")
+        reason = DROP_SKIPPED_PAIR if person_exists else DROP_SKIPPED_MEMBER
+        for reader in _skipped_drop_readers(link, person_id, pairs.get(pair_id), person_exists):
+            if (reader, reason) not in told:
+                told.add((reader, reason))
+                _record_member_link_history(link.refund, actor, reader, SAVED_DROP_LABEL, reason)
 
 
 def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
