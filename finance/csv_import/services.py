@@ -1,5 +1,5 @@
 import hashlib
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -26,7 +26,16 @@ from finance.lifecycle_services import (
     lock_ledger_writer,
 )
 from finance.csv_import.saved_mappings import headers_match, lock_saved_mapping, mapping_from_saved
-from finance.models import Account, AccountLink, AuditEvent, ImportBatch, SavedCsvMapping, Transaction
+from finance.models import (
+    Account,
+    AccountLink,
+    AuditEvent,
+    ImportBatch,
+    SavedCsvMapping,
+    Transaction,
+    TransactionCorrectionHistory,
+)
+from finance.simplefin_file_days import FILE_IMPORT_SOURCES
 from finance.simplefin_health import last_synced_days, link_is_failing
 
 MAPPING_CHANGED = "This mapping changed; preview the file again."
@@ -240,6 +249,11 @@ def commit_csv_import(
 
     preview = classify_overlap(account, preview_csv(document, mapping))
     new_rows = [row for row in preview.rows if row.overlap_status == "new"]
+    # What this file held but did not store, so undoing the batch that did
+    # store it can hand the row to this one instead of leaving a gap (#796).
+    skipped_duplicates = Counter(
+        _fingerprint_for(account, row) for row in preview.rows if row.overlap_status == "duplicate"
+    )
     source_file_sha256 = hashlib.sha256(content).hexdigest()
     # The batch is always written, even with no new rows: it records that the
     # member imported this date range, which Import due and Missing import read.
@@ -252,6 +266,7 @@ def commit_csv_import(
         date_range_end=date_range_end,
         saved_csv_mapping=saved_csv_mapping,
         owns_simplefin_through=_owned_through(preview, date_range_end),
+        skipped_duplicates=dict(skipped_duplicates),
     )
     if saved_csv_mapping is not None:
         lock_saved_mapping(saved_csv_mapping)
@@ -324,26 +339,218 @@ def categorize_imported_batch(principal, batch):
     return applied
 
 
-def undo_import_batch(principal, account_id, batch_id):
-    """Archive one import batch and only its transactions.
+@dataclass(frozen=True)
+class CoverageHole:
+    """Removed rows that an active batch still marks as covered but could not take (#796)."""
 
-    Manual entries are one-row batches too, but they are removed only through
-    delete_manual_transaction, which also records the deletion in history.
+    batch: ImportBatch
+    days: tuple[date, ...]
+    row_count: int
+
+
+@dataclass(frozen=True)
+class ImportUndoResult:
+    batch: ImportBatch
+    # Rows moved to another active batch that also holds them, instead of being archived.
+    rehomed_count: int = 0
+    holes: tuple[CoverageHole, ...] = ()
+
+
+def undo_import_batch(principal, account_id, batch_id) -> ImportUndoResult:
+    """Archive one import batch and the transactions only it accounts for.
+
+    A row that another active file import on the account skipped as a duplicate
+    stays active and moves to that batch (#796); see _rehome_rows_other_batches_skipped.
+    `holes` names each remaining batch that still covers an archived row's day
+    but could not take the row; see _coverage_holes. Manual entries are one-row
+    batches too, but they are removed only through delete_manual_transaction,
+    which also records the deletion in history.
     """
     return archive_batch(principal, account_id, batch_id, manual=False)
 
 
+def _other_active_file_batches(account, batch):
+    """Every other active file batch on the account, oldest first, locked."""
+    return list(
+        ImportBatch.objects.select_for_update()
+        .filter(
+            account=account,
+            status=ImportBatch.Status.ACTIVE,
+            archived_at__isnull=True,
+            source__in=FILE_IMPORT_SOURCES,
+        )
+        .exclude(pk=batch.pk)
+        .order_by("pk")
+    )
+
+
+def _active_counts_by_batch(account_id, fingerprints, *, excluding=None):
+    """Active rows on the account per fingerprint and batch: {fingerprint: Counter({batch id: rows})}."""
+    rows = Transaction.objects.filter(
+        account_id=account_id, status=Transaction.Status.ACTIVE, fingerprint__in=fingerprints
+    )
+    if excluding is not None:
+        rows = rows.exclude(import_batch=excluding)
+    counts = defaultdict(Counter)
+    for batch_id, fingerprint in rows.values_list("import_batch_id", "fingerprint"):
+        counts[fingerprint][batch_id] += 1
+    return counts
+
+
+def _rehome_rows_other_batches_skipped(person, batch, others, now):
+    """Move the rows of `batch` that another active batch skipped as duplicates to that batch (#796).
+
+    A file that held a row another batch had already stored skipped it and
+    recorded its fingerprint in `skipped_duplicates`. Archiving the row with
+    the batch that stored it would leave a gap that the other batch's date
+    range hides, so the row moves to the oldest batch that still needs it. The
+    rule is the one classify_overlap uses: fingerprints on this account,
+    counted. A batch needs a row only for the skipped copies that no other
+    active row on the account stands in for, so a file with two copies keeps
+    two rows and no more. Every other active batch is asked, earlier or later:
+    a row can come to rest on a batch committed after one that relies on it.
+    Rows no batch needs are left for the caller to archive.
+
+    Only a batch of the same source takes a row: `original_fields` is read by
+    the batch's source (a card's posted date column), so a row moved to another
+    source's batch would be misread. _coverage_holes reports those instead.
+    Returns the ids of the moved rows. The caller holds the account lock, which
+    every import and undo on the account takes.
+    """
+    takers = [other for other in others if other.source == batch.source and other.skipped_duplicates]
+    if not takers:
+        return []
+    candidates = defaultdict(list)
+    for pk, fingerprint in (
+        Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE)
+        .order_by("pk")
+        .values_list("pk", "fingerprint")
+    ):
+        candidates[fingerprint].append(pk)
+    wanted = {fingerprint for taker in takers for fingerprint in taker.skipped_duplicates} & set(candidates)
+    if not wanted:
+        return []
+    standing = _active_counts_by_batch(batch.account_id, wanted, excluding=batch)
+    history = []
+    for taker in takers:
+        moved = []
+        for fingerprint in sorted(wanted & set(taker.skipped_duplicates)):
+            elsewhere = sum(count for batch_id, count in standing[fingerprint].items() if batch_id != taker.pk)
+            take = min(taker.skipped_duplicates[fingerprint] - elsewhere, len(candidates[fingerprint]))
+            if take <= 0:
+                continue
+            moved.extend(candidates[fingerprint][:take])
+            del candidates[fingerprint][:take]
+            standing[fingerprint][taker.pk] += take
+            # The moved rows are this batch's own now, no longer skipped.
+            taker.skipped_duplicates[fingerprint] -= take
+            if not taker.skipped_duplicates[fingerprint]:
+                del taker.skipped_duplicates[fingerprint]
+        if not moved:
+            continue
+        Transaction.objects.filter(pk__in=moved).update(import_batch=taker, updated_at=now)
+        taker.save(update_fields=("skipped_duplicates",))
+        history.extend(
+            TransactionCorrectionHistory(
+                transaction_id=pk,
+                actor=person,
+                recorded_at=now,
+                field_name=TransactionCorrectionHistory.Field.IMPORT_BATCH,
+                previous_description=str(batch),
+                new_description=str(taker),
+            )
+            for pk in moved
+        )
+    TransactionCorrectionHistory.objects.bulk_create(history)
+    return [row.transaction_id for row in history]
+
+
+def _coverage_holes(batch, others, removed_ids):
+    """Each remaining batch that still covers a just-archived row but could not take it (#796).
+
+    The one place an undo answers for every other active file batch, earlier or
+    later, so no undo leaves a gap unsaid. Re-homing has already given each
+    same-source batch with a record the rows it needs. Two kinds of batch are
+    left. A batch of another source recorded the row but cannot take it; it has
+    a hole while fewer active rows with the fingerprint remain on the account
+    than its file held. A batch from before migration 0093 (`skipped_duplicates`
+    null) recorded nothing, so every removed row whose import-time day is
+    inside its range may be one it held, and the batch is named whether it was
+    committed before or after the undone one (owner decision 2026-11-25). That
+    warns more often than needed while such batches remain, and is still best
+    effort: nothing stored can show a row such a file held outside the range
+    the member confirmed for it. The days a hole names are import-time days,
+    the ones the batch marks covered.
+    """
+    unknown = [other for other in others if other.skipped_duplicates is None]
+    recorded = [other for other in others if other.skipped_duplicates and other.source != batch.source]
+    if not removed_ids or not (unknown or recorded):
+        return ()
+    # A row is matched by the day it was imported with, which its fingerprint
+    # was built from: the first date its correction history replaced, or its
+    # current date when the date was never corrected. A row moved out of a
+    # batch's range afterwards is still that batch's row.
+    imported_days = {}
+    for pk, day in (
+        TransactionCorrectionHistory.objects.filter(
+            transaction_id__in=removed_ids, field_name=TransactionCorrectionHistory.Field.TRANSACTION_DATE
+        )
+        .order_by("-recorded_at", "-pk")
+        .values_list("transaction_id", "previous_date")
+    ):
+        imported_days[pk] = day
+    removed = sorted(
+        (
+            (pk, fingerprint, imported_days.get(pk, day))
+            for pk, fingerprint, day in Transaction.objects.filter(pk__in=removed_ids).values_list(
+                "pk", "fingerprint", "transaction_date"
+            )
+        ),
+        key=lambda row: (row[2], row[0]),
+    )
+    fingerprints = {fingerprint for _pk, fingerprint, _day in removed}
+    active = _active_counts_by_batch(batch.account_id, fingerprints) if recorded else {}
+    holes = []
+    for other in sorted(unknown + recorded, key=lambda found: found.pk):
+        days = []
+        if other.skipped_duplicates is None:
+            days = [
+                day for _pk, _fingerprint, day in removed
+                if other.date_range_start <= day <= other.date_range_end
+            ]
+        else:
+            short = {
+                fingerprint: other.skipped_duplicates[fingerprint]
+                - sum(count for batch_id, count in active[fingerprint].items() if batch_id != other.pk)
+                for fingerprint in fingerprints & set(other.skipped_duplicates)
+            }
+            for _pk, fingerprint, day in removed:
+                if short.get(fingerprint, 0) > 0:
+                    short[fingerprint] -= 1
+                    days.append(day)
+        if days:
+            holes.append(CoverageHole(other, tuple(sorted(set(days))), len(days)))
+    return tuple(holes)
+
+
 @transaction.atomic
-def archive_batch(principal, account_id, batch_id, *, manual):
+def archive_batch(principal, account_id, batch_id, *, manual) -> ImportUndoResult:
     """Archive one active batch of the given kind (manual entry or import)."""
     person = _person_for(principal)
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
         raise PermissionDenied(_DENIED)
-    seed_leg_ids = list(
-        Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
-    )
-    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=seed_leg_ids)
+    # A manual entry's batch holds its one row for good, so its rows can seed
+    # the ordered counterpart locks. An import's cannot: until the account lock
+    # is held, a concurrent undo may re-home a row into the batch (#796), and a
+    # counterpart account missed here would be reached later out of order. Every
+    # row of the account seeds the locks instead; rows never change account.
+    manual_leg_ids = None
+    if manual:
+        manual_leg_ids = list(
+            Transaction.objects.filter(import_batch_id=batch_id, account_id=account_id).values_list("pk", flat=True)
+        )
+    account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=manual_leg_ids)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
         raise PermissionDenied(_DENIED)
     batch = (
@@ -360,11 +567,16 @@ def archive_batch(principal, account_id, batch_id, *, manual):
         raise PermissionDenied(_DENIED)
     from finance.receipt_services import delete_receipts_for_transactions
 
+    now = timezone.now()
+    # Read under the account lock, before any row leaves the batch.
+    seed_leg_ids = list(Transaction.objects.filter(import_batch=batch).values_list("pk", flat=True))
+    # Deleting a manual entry removes that entry, whatever a file also holds.
+    others = [] if manual else _other_active_file_batches(account, batch)
+    rehomed_ids = _rehome_rows_other_batches_skipped(person, batch, others, now)
     removed_ids = list(
         Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE).values_list("pk", flat=True)
     )
     delete_receipts_for_transactions(removed_ids)
-    now = timezone.now()
     Transaction.objects.select_for_update().filter(
         import_batch=batch,
         status=Transaction.Status.ACTIVE,
@@ -387,5 +599,6 @@ def archive_batch(principal, account_id, batch_id, *, manual):
     if not manual:
         record(person, AuditEvent.Action.IMPORT_UNDONE, AuditEvent.TargetType.IMPORT_BATCH, batch.pk,
                audience={"account": account},
-               metadata={"batch_id": batch.pk, "row_count": len(removed_ids), "format": batch.source})
-    return batch
+               metadata={"batch_id": batch.pk, "row_count": len(removed_ids), "rehomed_count": len(rehomed_ids),
+                         "format": batch.source})
+    return ImportUndoResult(batch, len(rehomed_ids), _coverage_holes(batch, others, removed_ids))

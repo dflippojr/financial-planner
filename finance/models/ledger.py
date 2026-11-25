@@ -258,6 +258,8 @@ class TransactionCorrectionHistory(models.Model):
         TAGS = "tags", "Tags"
         DELETED = "deleted", "Deleted"
         UNTRACKED = "untracked", "Untracked transfer"
+        # An undone import's row moved to the later import that skipped it as a duplicate (#796).
+        IMPORT_BATCH = "import_batch", "Import"
 
     transaction = models.ForeignKey(
         Transaction,
@@ -323,7 +325,7 @@ class TransactionCorrectionHistory(models.Model):
                     | Q(
                         field_name__in=(
                             "description", "category", "exclusion", "refund_link", "note", "tags", "deleted",
-                            "untracked",
+                            "untracked", "import_batch",
                         ),
                         previous_date__isnull=True,
                         new_date__isnull=True,
@@ -365,6 +367,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.TAGS,
             self.Field.DELETED,
             self.Field.UNTRACKED,
+            self.Field.IMPORT_BATCH,
         ):
             return self.previous_description
         return self._amount_display(self.previous_amount_minor)
@@ -382,6 +385,7 @@ class TransactionCorrectionHistory(models.Model):
             self.Field.TAGS,
             self.Field.DELETED,
             self.Field.UNTRACKED,
+            self.Field.IMPORT_BATCH,
         ):
             return self.new_description
         return self._amount_display(self.new_amount_minor)

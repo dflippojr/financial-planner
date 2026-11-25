@@ -80,6 +80,10 @@ def test_a_batch_from_before_0092_owns_no_days_and_rollback_keeps_every_row():
             assert file_owned_through(account_id, cutover) is None
             assert file_owned_days(account_id, cutover).through is None
 
+        # The live import below writes every current column, so it needs the current schema.
+        executor = MigrationExecutor(connection)
+        executor.migrate(latest)
+
         # A file imported after the upgrade while the link is failing stores its date.
         owner = Person.objects.get(pk=owner_id)
         account = Account.objects.get(pk=account_id)
