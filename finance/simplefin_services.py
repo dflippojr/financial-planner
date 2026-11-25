@@ -57,6 +57,7 @@ MAX_BIGINT = 2**63 - 1
 # provider row cannot bloat every page that lists it.
 MAX_ID_CHARS = 255
 from .input_limits import MAX_DESCRIPTION_CHARS
+from .account_locks import lock_accounts
 # Minor units of a signed 64-bit column have at most 19 digits, so an amount
 # with a larger exponent is rejected before any arithmetic.
 MAX_AMOUNT_ADJUSTED_EXPONENT = 18
@@ -385,7 +386,7 @@ def _save_link(connection, simplefin_account_id, account, cutover, mode):
     # The account row lock is the one a CSV import holds while it reads the
     # cut-over and writes rows, so an import cannot land between the check
     # below and the save.
-    Account.objects.select_for_update().filter(pk=account.pk).first()
+    lock_accounts((account.pk,), pks_only=True)
     existing = (
         AccountLink.objects.filter(connection=connection, simplefin_account_id=simplefin_account_id)
         .values_list("account_id", "cutover_date", "mode")
@@ -908,7 +909,7 @@ def _refresh_calculated(person, account_ids):
 
     for account_id in sorted(account_ids):
         with transaction.atomic():
-            Account.objects.select_for_update(of=("self",)).filter(pk=account_id).first()
+            lock_accounts((account_id,), pks_only=True)
             refresh_calculated_balances(person, account_id)
 
 

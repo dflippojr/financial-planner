@@ -31,6 +31,7 @@ from .models import (
 )
 from .tag_services import NOTE_TOO_LONG
 from .untracked_transfers import set_mark
+from .account_locks import lock_accounts
 
 BULK_EDIT_CAP = 500
 UNDO_MINUTES = 10
@@ -272,8 +273,7 @@ def _lock_rows(person, transactions, *, with_refunds=False, optional_ids=()):
     ids = sorted({item.pk for item in all_items})
     optional = list(Transaction.objects.filter(pk__in=optional_ids).exclude(pk__in=ids).only("pk", "account_id"))
     account_ids = sorted({item.account_id for item in all_items + optional})
-    if account_ids:
-        list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    lock_accounts(account_ids, pks_only=True)
     rows = list(
         Transaction.objects.select_for_update(of=("self",))
         .select_related("account", "category", "refund_link")

@@ -13,6 +13,7 @@ from .audit_services import changed_names, owned_audience, record, snapshot
 from .edit_permission_services import check_can_edit
 from .models import Account, AuditEvent, BalanceSnapshot, PlannedItem, SavingsGoal
 from .net_worth import signed_balance_minor, source_rank_expression
+from .account_locks import lock_accounts
 
 SOURCE_SNAPSHOT = "snapshot"
 SOURCE_MANUAL = "manual"
@@ -423,7 +424,7 @@ def _lock_fund_accounts(saved, account):
     """
     saved_account_id = saved.linked_account_id  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
     ids = sorted({pk for pk in (saved_account_id, account.pk if account is not None else None) if pk is not None})
-    list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk", flat=True))
+    lock_accounts(ids, pks_only=True)
 
 
 def set_savings_goal_completed(principal, goal, completed):

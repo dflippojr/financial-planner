@@ -71,6 +71,7 @@ from .transfer_pairing import (
 )
 from .rule_services import manual_rule_offer
 from .untracked_transfers import mark_refusal, mark_untracked_transfer, unmark_untracked_transfer
+from .account_locks import lock_account
 
 
 def _query_without_page(request):
@@ -240,10 +241,9 @@ def transaction_edit(request, transaction_id):
                 # this same database transaction.
                 person = get_object_or_404(Person, user=request.user)
                 lock_actor_household(person)
-                account = get_object_or_404(
-                    visible_rows(Account, request.user).select_for_update(),
-                    pk=financial_transaction.account_id,
-                )
+                account = lock_account(financial_transaction.account_id, queryset=visible_rows(Account, request.user))
+                if account is None:
+                    raise Http404
                 financial_transaction = get_object_or_404(
                     Transaction.objects.select_for_update(),
                     pk=financial_transaction.pk,

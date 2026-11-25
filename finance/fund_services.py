@@ -38,6 +38,7 @@ from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, FundEntry, SavingsGoal
 from .months import month_start
 from .savings_goal_services import months_left
+from .account_locks import lock_account
 
 NOT_A_FUND_ERROR = "This goal does not hold a share of an account."
 FUND_ACCOUNT_ERROR = "This fund's account can't take new money; edit the goal to choose its account."
@@ -139,7 +140,7 @@ def _lock_account(person, goal):
     """Lock and return the fund's account, refusing one that cannot take money."""
     if goal.linked_account_id is None:
         raise ValidationError(FUND_ACCOUNT_ERROR)
-    account = visible_rows(Account, person).select_for_update().filter(pk=goal.linked_account_id).first()
+    account = lock_account(goal.linked_account_id, queryset=visible_rows(Account, person))
     if account is None:
         raise PermissionDenied(_DENIED)
     if not fund_matches_account(goal, account):

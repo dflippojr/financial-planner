@@ -1,5 +1,3 @@
-from contextvars import ContextVar
-
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import ProtectedError, Q
@@ -7,6 +5,8 @@ from django.utils import timezone
 
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
+from .account_locks import AccountSetGrew as _AccountSetGrew
+from .account_locks import holding_accounts, lock_account, lock_accounts
 from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
 from .models import (
     AiPlanLink,
@@ -44,8 +44,8 @@ LENT_CHOICES = (LENT_HANDOVER, LENT_DELETE)
 # (including counterpart accounts of transfer pairs and refund links), then
 # the rows being changed or deleted. delete_member_data locks the memberships
 # of every household it writes, then every account it will touch, each in one
-# pk-ordered pass; any later lock on an account outside that pass restarts it
-# (_require_held_accounts, #810). Two transactions that take the same locks
+# pk-ordered pass; any later account lock outside that pass, from any module,
+# restarts it (finance.account_locks, #810). Two transactions that take the same locks
 # in a different order can each hold what the other awaits, and PostgreSQL then
 # aborts one of them with a deadlock error. Always call lock_actor_household()
 # first.
@@ -91,46 +91,9 @@ def lock_ledger_writer(person):
     return own, memberships
 
 
-# The accounts a running delete_member_data attempt locked in its first pass
-# (#810). Any other account lock in that attempt restarts it; see
-# _require_held_accounts.
-_deletion_held_accounts: ContextVar[frozenset | None] = ContextVar("deletion_held_accounts", default=None)
-
-
-class _AccountSetGrew(Exception):
-    """A member deletion attempt needs a lock its first pass did not take, so it starts again."""
-
-    def __init__(self, account_ids, household_ids=frozenset()):
-        super().__init__("member deletion account set grew")
-        self.account_ids = set(account_ids)
-        self.household_ids = set(household_ids)
-
-
-def _require_held_accounts(account_ids):
-    """Inside a member deletion, refuse to lock an account its first pass does not hold.
-
-    Locking it now could follow a higher pk already held, so the attempt rolls
-    back and starts again with the account in its first pass. Outside a
-    deletion this does nothing.
-    """
-    held = _deletion_held_accounts.get()
-    if held is None:
-        return
-    wanted = {pk for pk in account_ids if pk is not None}
-    if not wanted <= held:
-        raise _AccountSetGrew(held | wanted)
-
-
 def _visible_account_for_update(principal, account_id, **annotations):
     """Lock a visible account; `annotations` are read in the same query."""
-    _require_held_accounts((account_id,))
-    account = (
-        Account.objects.visible_to(principal)
-        .select_for_update()
-        .annotate(**annotations)
-        .filter(pk=account_id)
-        .first()
-    )
+    account = lock_account(account_id, queryset=Account.objects.visible_to(principal).annotate(**annotations))
     if account is None:
         raise PermissionDenied(_DENIED)
     return account
@@ -274,11 +237,7 @@ def _pair_counterpart_account_ids(account_id, seed_leg_ids=None):
 
 
 def _lock_accounts_in_pk_order(account_ids):
-    ids = sorted(account_ids)
-    if not ids:
-        return
-    _require_held_accounts(ids)
-    list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk"))
+    lock_accounts(account_ids, pks_only=True)
 
 
 def _lock_visible_account_with_counterparts(person, account_id, extras):
@@ -481,12 +440,7 @@ def end_current_membership(person, *, audit_actor=None):
         Transaction.objects.filter(account_id__in=household_account_ids).values_list("pk", flat=True)
     )
     counterpart_ids = _pair_counterpart_account_ids(None, seed_leg_ids)
-    _require_held_accounts(set(household_account_ids) | counterpart_ids)
-    locked_accounts = list(
-        Account.objects.select_for_update()
-        .filter(pk__in=set(household_account_ids) | counterpart_ids)
-        .order_by("pk")
-    )
+    locked_accounts = lock_accounts(set(household_account_ids) | counterpart_ids)
     household_accounts = [
         account for account in locked_accounts
         if account.scope == Account.Scope.HOUSEHOLD and account.household_id == own_membership.household_id
@@ -1184,11 +1138,8 @@ def _delete_member_data_once(principal, lent_choices, known_accounts, known_hous
     again_accounts, again_households = settled_sets()
     if not again_accounts <= accounts or not again_households <= household_ids:
         raise _AccountSetGrew(accounts | again_accounts, household_ids | again_households)
-    held = _deletion_held_accounts.set(frozenset(accounts))
-    try:
+    with holding_accounts(accounts):
         _delete_member_data_under_locks(person, user, lent, submitted, household_id, successor)
-    finally:
-        _deletion_held_accounts.reset(held)
 
 
 def _delete_member_data_under_locks(person, user, lent, submitted, household_id, successor):

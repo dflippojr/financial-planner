@@ -41,6 +41,7 @@ from .months import add_months, month_end
 from .net_worth import signed_balance_minor, source_rank_expression
 from .reconciliation import RECONCILED_TYPES, _coverage, _covered, _daily_totals
 from .snapshot_services import _lock_editable_account, _record_snapshot
+from .account_locks import lock_account
 
 # The balance of these accounts is the sum of their transactions. Investment
 # values move with the market; loans and physical assets hold no transactions.
@@ -242,11 +243,7 @@ def refresh_calculated_balances(person, account_id):
     """
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("refresh_calculated_balances must run inside the caller's transaction.")
-    account = (
-        Account.objects.select_for_update(of=("self",))
-        .filter(has_calculated_expression(), pk=account_id)
-        .first()
-    )
+    account = lock_account(account_id, queryset=Account.objects.filter(has_calculated_expression()), of_self=True)
     if account is None or account.status != Account.Status.ACTIVE or account.archived_at is not None:
         # An archived account keeps its history as it was, calculated rows included.
         return (0, 0, 0)

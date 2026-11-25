@@ -4,6 +4,7 @@ from django.db import IntegrityError, transaction
 from .audit_services import changed_names, record, snapshot as audit_snapshot
 from .lifecycle_services import _DENIED, _person_for, lock_actor_household
 from .models import Account, AuditEvent, BalanceSnapshot
+from .account_locks import lock_account
 
 
 class SnapshotError(Exception):
@@ -16,11 +17,10 @@ DUPLICATE_MANUAL = "A manual balance already exists for this date."
 def _lock_editable_account(principal, account_id):
     person = _person_for(principal)
     lock_actor_household(person)
-    account = (
-        Account.objects.visible_to(principal)
-        .select_for_update(of=("self",))
-        .filter(pk=account_id, status=Account.Status.ACTIVE, archived_at__isnull=True)
-        .first()
+    account = lock_account(
+        account_id,
+        queryset=Account.objects.visible_to(principal).filter(status=Account.Status.ACTIVE, archived_at__isnull=True),
+        of_self=True,
     )
     if account is None:
         raise PermissionDenied(_DENIED)
