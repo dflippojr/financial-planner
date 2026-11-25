@@ -5,15 +5,24 @@ locks, in pk order, and holds the member-deletion held-set guard. This test
 reads the source and fails on any other `select_for_update` that can lock an
 Account row:
 
-- a chain rooted at `Account` or `visible_rows(Account, ...)`;
-- a lock without `of=` on a chain whose `select_related` joins an account
-  (PostgreSQL then locks the joined account rows too);
-- a lock on a receiver this test cannot attribute to a model (a variable, a
-  helper's queryset, `model.objects` in a loop). Such sites are listed in
-  GENERIC_LOCKS with the reason they never lock an Account; a new one fails
-  until it is reviewed and listed.
+- an Account queryset, however the model is named (an import alias,
+  `models.Account`, `visible_rows(Account, ...)`, a queryset variable built
+  earlier in the function);
+- a lock whose `of=` targets do not exclude a join to accounts (no `of`, or
+  `of=()`, locks every joined table; PostgreSQL then locks the account rows
+  too). Joins are read from `select_related`, filter keys, `Q`, `F` and
+  aggregate paths, and ordering or values fields, through Django's model
+  metadata, including querysets built earlier in the function;
+- a lock with a join or expression the scan cannot read (an opaque filter
+  expression, a bare `select_related()`, a computed `of`), unless `of`
+  restricts it to rows that are not accounts;
+- a lock on a receiver whose model the scan cannot establish (a parameter, a
+  helper's queryset, `model.objects` in a loop). It fails closed: such sites
+  are listed in GENERIC_LOCKS with the reason they never lock an Account, and
+  a new one fails until it is reviewed and listed.
 
-Static only; no database.
+Static only; no database. Concurrency review r1 at ba14aa3 (#811 comment
+7173541959) added the alias, `of=()` and filter-join shapes.
 """
 
 import ast
@@ -29,9 +38,7 @@ GENERIC_LOCKS = {
     ("finance/ai/jobs.py", "_lock_qs"): "AiJob querysets only",
     ("finance/auth_services.py", "accept_invitation"): "Invitation rows",
     ("finance/auth_services.py", "lock_first_member_creation"): "the user model",
-    ("finance/chat/balance_cards.py", "_manual_on"): "BalanceSnapshot rows, of=self",
     ("finance/chat/cleanup_cards.py", "_locked"): "RecurringSeries, TransferPair and CategorySuggestion rows, of=self",
-    ("finance/chat/proposals.py", "_budget_for"): "Budget rows",
     ("finance/chat/proposals.py", "_apply_planned_row"): "PlannedItem rows",
     ("finance/chat/proposals.py", "_apply_goal_row"): "SavingsGoal rows",
     ("finance/chat/services.py", "keep_conversation_if_visible"): "non-account used rows; accounts go through lock_accounts first",
@@ -44,74 +51,274 @@ GENERIC_LOCKS = {
 
 
 def _chain(node):
-    """The calls of a method chain, outermost first, and the expression it starts from."""
-    calls = []
+    """The calls of a method chain, outermost first, the attribute names after its root, and the root."""
+    calls, attributes = [], []
     while True:
         if isinstance(node, ast.Call):
             calls.append(node)
             node = node.func
         elif isinstance(node, ast.Attribute):
+            attributes.append(node.attr)
             node = node.value
         elif isinstance(node, ast.Subscript):
             node = node.value
         else:
-            return calls, node
+            attributes.reverse()
+            return calls, attributes, node
 
 
-def _is_account_chain(calls, root):
-    if isinstance(root, ast.Name) and root.id == "Account":
-        return True
-    return any(
-        isinstance(call.func, ast.Name) and call.func.id == "visible_rows"
-        and call.args and isinstance(call.args[0], ast.Name) and call.args[0].id == "Account"
-        for call in calls
-    )
+def _models():
+    from django.apps import apps
+    from django.contrib.auth import get_user_model
+
+    by_name = {model.__name__: model for model in apps.get_models()}
+    by_name.update({model.__name__: model for model in apps.get_app_config("finance").get_models()})
+    user = get_user_model()
+    by_name.setdefault(user.__name__, user)
+    return by_name, apps.get_model("finance", "Account"), user
 
 
-def _joins_an_account(calls):
+class _Module:
+    """What one module's imports say about names: model aliases and module aliases."""
+
+    def __init__(self, tree):
+        self.models, self.account, self.user = _models()
+        self.aliases = {}
+        self.modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    local = alias.asname or alias.name
+                    if alias.name in self.models:
+                        self.aliases[local] = alias.name
+                    elif alias.name == "models":
+                        self.modules.add(local)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.endswith(".models") or alias.name == "finance.models":
+                        self.modules.add(alias.asname or alias.name.split(".")[0])
+
+    def model_named(self, node):
+        """The model an expression names (a class, an alias, models.X, get_user_model()), or None."""
+        if isinstance(node, ast.Name):
+            name = self.aliases.get(node.id, node.id)
+            return self.models.get(name)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in self.modules:
+            return self.models.get(node.attr)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "get_user_model":
+            return self.user
+        return None
+
+
+def _local_assignments(function):
+    assigned = {}
+    if function is None:
+        return assigned
+    for node in ast.walk(function):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            assigned.setdefault(node.targets[0].id, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            assigned.setdefault(node.target.id, []).append(node.value)
+    return assigned
+
+
+def _receiver(module, node, assigned, depth=0):
+    """(model or None, every call of the chain and of the querysets it was built from)."""
+    calls, attributes, root = _chain(node)
     for call in calls:
-        if isinstance(call.func, ast.Attribute) and call.func.attr == "select_related":
+        if isinstance(call.func, ast.Name) and call.func.id == "visible_rows" and call.args:
+            return module.model_named(call.args[0]), calls
+    model = module.model_named(root)
+    if model is None and isinstance(root, ast.Name) and root.id in module.modules and attributes:
+        model = module.models.get(attributes[0])
+    if model is not None:
+        return model, calls
+    if isinstance(root, ast.Name) and root.id in assigned and depth < 5:
+        models, gathered = set(), list(calls)
+        for value in assigned[root.id]:
+            value_calls, _attributes, value_root = _chain(value)
+            if isinstance(value_root, ast.Name) and value_root.id == root.id:
+                gathered += value_calls  # query = query.filter(...): only adds calls
+                continue
+            origin, origin_calls = _receiver(module, value, assigned, depth + 1)
+            models.add(origin)
+            gathered += origin_calls
+        if len(models) == 1 and None not in models:
+            return models.pop(), gathered
+    return None, calls
+
+
+PATH_METHODS = {"filter", "exclude", "get", "order_by", "values", "values_list", "only", "defer", "distinct",
+                "annotate", "alias", "get_or_create", "update_or_create"}
+PATH_CALLS = {"F", "Q", "Count", "Sum", "Min", "Max", "Avg", "OuterRef"}
+
+
+def _paths(calls):
+    """(select_related paths, filter-style paths, whether some expression could not be read)."""
+    selected, filtered, opaque = [], [], False
+
+    def value(node):
+        """A filter value: only F, Q and aggregate calls inside it name paths; anything else is compared against."""
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) and inner.func.id in PATH_CALLS:
+                expression(inner)
+
+    def expression(node):
+        nonlocal opaque
+        if isinstance(node, ast.Constant):
+            return
+        if isinstance(node, ast.BinOp):
+            expression(node.left)
+            expression(node.right)
+        elif isinstance(node, ast.UnaryOp):
+            expression(node.operand)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in PATH_CALLS:
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    filtered.append(arg.value)
+                else:
+                    expression(arg)
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    opaque = True
+                else:
+                    filtered.append(keyword.arg)
+                    value(keyword.value)
+        elif isinstance(node, (ast.Name, ast.Attribute, ast.List, ast.Tuple, ast.Set)):
+            return  # a value compared against, not a path
+        else:
+            opaque = True
+
+    for call in calls:
+        if not isinstance(call.func, ast.Attribute):
+            continue
+        method = call.func.attr
+        if method == "select_related":
+            if not call.args:
+                opaque = True
             for arg in call.args:
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    parts = arg.value.split("__")
-                    if any(part in ("account", "linked_account", "secured_asset") for part in parts):
-                        return True
+                    selected.append(arg.value)
+                else:
+                    opaque = True
+        elif method in PATH_METHODS:
+            for arg in call.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    filtered.append(arg.value.lstrip("-"))
+                elif isinstance(arg, ast.Starred):
+                    opaque = True
+                else:
+                    expression(arg)
+            for keyword in call.keywords:
+                if keyword.arg is None:
+                    opaque = True
+                elif method in ("annotate", "alias"):
+                    expression(keyword.value)
+                elif keyword.arg in ("defaults", "create_defaults"):
+                    continue
+                else:
+                    filtered.append(keyword.arg)
+                    value(keyword.value)
+    return selected, filtered, opaque
+
+
+def _reaches_account(model, path, account, *, select):
+    """Whether following `path` from `model` joins the account table."""
+    from django.core.exceptions import FieldDoesNotExist
+
+    parts = path.split("__")
+    current = model
+    for index, part in enumerate(parts):
+        if part == "pk":
+            return False
+        try:
+            field = current._meta.get_field(part)
+        except FieldDoesNotExist:
+            return False  # a lookup or transform: the path ends here
+        if not field.is_relation or field.related_model is None:
+            return False
+        target = field.related_model
+        if target is account:
+            if select or not (field.many_to_one or field.one_to_one) or not field.concrete:
+                return True
+            rest = parts[index + 1:]
+            if not rest:
+                return False  # account=..., compared on the local column
+            try:
+                return account._meta.get_field(rest[0]) != account._meta.pk
+            except FieldDoesNotExist:
+                return False  # account__in=..., a lookup on the local column
+        current = target
     return False
 
 
-def _is_model_root(root):
-    if isinstance(root, ast.Name):
-        return root.id[:1].isupper()
-    return isinstance(root, ast.Call) and isinstance(root.func, ast.Name) and root.func.id == "get_user_model"
+def _of_targets(lock):
+    """None when `of` locks every joined table (absent or empty), else its paths, or False if unreadable."""
+    for keyword in lock.keywords:
+        if keyword.arg != "of":
+            continue
+        value = keyword.value
+        if isinstance(value, (ast.Tuple, ast.List)) and all(
+            isinstance(element, ast.Constant) and isinstance(element.value, str) for element in value.elts
+        ):
+            targets = [element.value for element in value.elts]
+            return targets or None
+        if isinstance(value, ast.IfExp):
+            return False
+        return False
+    return None
 
 
 def _scan_source(relative, source):
-    """Yield (module, function, line, kind) for each select_for_update in one module's source that may lock an Account."""
+    """Yield (module, function, line, kind) for each select_for_update in one module's source that may lock an Account.
+
+    kind is "account" (an Account queryset), "joined account" (a join to
+    accounts that `of` does not exclude), "possible joined account" (a join
+    or expression this scan cannot read, without `of` restricting the lock),
+    or "generic" (a receiver whose model the scan cannot establish).
+    """
     tree = ast.parse(source)
-    functions = {}
+    module = _Module(tree)
+    enclosing = {}
     for function in ast.walk(tree):
         if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for inner in ast.walk(function):
-                functions[id(inner)] = function.name
+                enclosing[id(inner)] = function
     seen = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        calls, root = _chain(node)
+        calls, _attributes, _root = _chain(node)
         locks = [call for call in calls if isinstance(call.func, ast.Attribute) and call.func.attr == "select_for_update"]
         if not locks or id(locks[0]) in seen:
             continue
         seen.add(id(locks[0]))
         lock = locks[0]
-        where = (relative, functions.get(id(lock), "<module>"))
-        if _is_account_chain(calls, root):
-            yield (*where, lock.lineno, "account")
-        elif _joins_an_account(calls) and not any(keyword.arg == "of" for keyword in lock.keywords):
-            yield (*where, lock.lineno, "joined account")
-        elif not _is_model_root(root) and not any(
-            isinstance(call.func, ast.Name) and call.func.id == "visible_rows" for call in calls
+        function = enclosing.get(id(lock))
+        where = (relative, function.name if function is not None else "<module>", lock.lineno)
+        model, all_calls = _receiver(module, node, _local_assignments(function))
+        if model is None:
+            yield (*where, "generic")
+            continue
+        if model is module.account:
+            yield (*where, "account")
+            continue
+        targets = _of_targets(lock)
+        if targets is False:
+            yield (*where, "possible joined account")
+            continue
+        if targets is not None:
+            if any(target != "self" and _reaches_account(model, target, module.account, select=True)
+                   for target in targets):
+                yield (*where, "joined account")
+            continue
+        selected, filtered, opaque = _paths(all_calls)
+        if any(_reaches_account(model, path, module.account, select=True) for path in selected) or any(
+            _reaches_account(model, path, module.account, select=False) for path in filtered
         ):
-            yield (*where, lock.lineno, "generic")
+            yield (*where, "joined account")
+        elif opaque:
+            yield (*where, "possible joined account")
 
 
 def _locks():
@@ -145,27 +352,65 @@ def test_the_helper_itself_locks_accounts():
     assert "select_for_update" in source and "_require_held_accounts" in source
 
 
-def test_the_scanner_sees_each_kind_of_account_lock():
-    """Guard the scanner against itself: each shape it must catch, on synthetic source."""
-    samples = {
-        "account": "Account.objects.select_for_update().filter(pk=1)",
-        "visible": "visible_rows(Account, person).select_for_update().first()",
-        "multiline": "(Account.objects\n    .visible_to(person)\n    .select_for_update()\n    .first())",
-        "joined": "Transaction.objects.select_for_update().select_related('account').first()",
-        "generic": "qs.select_for_update()",
-    }
-    kinds = {}
-    for name, expression in samples.items():
-        calls, root = _chain(ast.parse(expression, mode="eval").body)
-        if _is_account_chain(calls, root):
-            kinds[name] = "account"
-        elif _joins_an_account(calls):
-            kinds[name] = "joined account"
-        elif not _is_model_root(root):
-            kinds[name] = "generic"
-    assert kinds == {"account": "account", "visible": "account", "multiline": "account",
-                     "joined": "joined account", "generic": "generic"}
-    assert not _joins_an_account(_chain(ast.parse("T.objects.select_related('category')", mode="eval").body)[0])
+SCANNER_CASES = {
+    "Account.objects.select_for_update().filter(pk=1)": "account",
+    "visible_rows(Account, person).select_for_update().first()": "account",
+    "(Account.objects\n        .visible_to(person)\n        .select_for_update()\n        .first())": "account",
+    "models.Account.objects.select_for_update().first()": "account",
+    "Transaction.objects.select_for_update().select_related('account').first()": "joined account",
+    "Transaction.objects.select_for_update(of=('self', 'account')).select_related('account').first()":
+        "joined account",
+    "Transaction.objects.select_for_update().filter(Q(account__household_id=1)).first()": "joined account",
+    "Transaction.objects.select_for_update().order_by('account__name').first()": "joined account",
+    "Transaction.objects.select_for_update().filter(amount_minor=F('account__minimum_payment_minor')).first()":
+        "joined account",
+    "Transaction.objects.select_for_update().filter(exclusion_exists_for(person)).first()":
+        "possible joined account",
+    "Transaction.objects.select_for_update(of=OF).first()": "possible joined account",
+    "Transaction.objects.select_for_update().select_related().first()": "possible joined account",
+    "qs.select_for_update()": "generic",
+    "Unknown.objects.select_for_update()": "generic",
+}
+ALLOWED_SHAPES = (
+    "Budget.objects.select_for_update().filter(pk__in=sorted(ids), household=current_household(person)).first()",
+    "Transaction.objects.select_for_update(of=('self',)).select_related('account').first()",
+    "Transaction.objects.select_for_update().filter(account=account, account_id=1, account__in=[1]).first()",
+    "Transaction.objects.select_for_update().filter(account__pk=1, account__id=2).first()",
+    "Budget.objects.select_for_update().filter(category__name='x').first()",
+)
+PREAMBLE = "from finance import models\nfrom finance.models import Account, Budget, Transaction\n"
+
+
+def _kinds(expression):
+    source = PREAMBLE + "def lock():\n    return " + expression + "\n"
+    return [kind for _module, _function, _line, kind in _scan_source("finance/new_service.py", source)]
+
+
+@pytest.mark.parametrize("expression", sorted(SCANNER_CASES))
+def test_the_scanner_classifies_each_lock_shape(expression):
+    assert _kinds(expression) == [SCANNER_CASES[expression]]
+
+
+@pytest.mark.parametrize("expression", ALLOWED_SHAPES)
+def test_the_scanner_accepts_locks_that_cannot_reach_an_account(expression):
+    assert _kinds(expression) == []
+
+
+def test_the_scanner_follows_a_queryset_built_earlier_in_the_function():
+    source = PREAMBLE + (
+        "def lock(person):\n"
+        "    query = Transaction.objects.filter(account__owner=person)\n"
+        "    query = query.select_for_update()\n"
+        "    return query.first()\n"
+        "def safe():\n"
+        "    query = Budget.objects.filter(status='active')\n"
+        "    return query.select_for_update().first()\n"
+        "def unknown(rows):\n"
+        "    query = rows if rows else Budget.objects.all()\n"
+        "    return query.select_for_update().first()\n"
+    )
+    found = {function: kind for _module, function, _line, kind in _scan_source("finance/new_service.py", source)}
+    assert found == {"lock": "joined account", "unknown": "generic"}
 
 
 # Concurrency review r1 at ba14aa3 (#811 comment 7173541959): shapes the
