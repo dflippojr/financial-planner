@@ -29,7 +29,7 @@ from finance.csv_import.parser import Mapping
 from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
 from finance.lifecycle_services import change_account_share_mode, share_account
-from finance.models import Account, AccountLink, ImportBatch, RefundLink, TransferPair
+from finance.models import Account, AccountLink, ImportBatch, RefundLink, Transaction, TransferPair
 from finance.simplefin_services import save_account_links, sync_connection
 from finance.transaction_export import iter_transaction_csv
 from finance.transaction_filters import visible_transaction_queryset
@@ -40,6 +40,7 @@ from .strategies import (
     CAPITAL_ONE,
     HUNTINGTON,
     MAX_MINOR,
+    OFX,
     Row,
     feed_balances,
     feed_currencies,
@@ -97,6 +98,79 @@ def test_importing_the_same_file_twice_changes_nothing(case):
         assert ledger.ledger_state(owner, [account]) == before
         # The first import kept every row of the file, including identical ones.
         assert not Counter(_key(shape, row) for row in target) - before["rows"]
+
+
+# 1b. Undoing files leaves what the remaining files hold (#796).
+
+@st.composite
+def undo_cases(draw):
+    shape = draw(shapes)
+    pool = draw(rows(max_size=6))
+    files = draw(overlapping_files(pool))
+    undone = draw(st.lists(st.integers(0, len(files) - 1), unique=True, max_size=len(files)))
+    return shape, files, undone
+
+
+@given(undo_cases())
+def test_undoing_files_leaves_exactly_what_the_remaining_files_hold(case):
+    shape, files, undone = case
+    with ledger.isolated():
+        owner, account = _new_member_with_account(shape)
+        batches = [ledger.import_rows(owner, account, shape, file).batch for file in files]
+
+        for done, index in enumerate(undone, start=1):
+            undo_import_batch(owner, account.pk, batches[index].pk)
+
+            # A row another file also holds stays, on a batch that is still
+            # active; a row only undone files held is gone. Never a gap that a
+            # remaining file's date range hides, and never an extra copy.
+            expected = Counter()
+            for position, file in enumerate(files):
+                if position not in undone[:done]:
+                    expected |= Counter(_key(shape, row) for row in file)
+            assert ledger.content_counter([account]) == expected
+            assert not Transaction.objects.filter(
+                account=account, status=Transaction.Status.ACTIVE, import_batch__status=ImportBatch.Status.ARCHIVED
+            ).exists()
+
+
+@st.composite
+def mixed_source_undo_cases(draw):
+    pool = draw(rows(max_size=5))
+    files = draw(overlapping_files(pool))
+    # Two checking formats that store the same description, so their rows overlap.
+    sources = draw(st.lists(st.sampled_from((HUNTINGTON, OFX)), min_size=len(files), max_size=len(files)))
+    undone = draw(st.lists(st.integers(0, len(files) - 1), unique=True, max_size=len(files)))
+    return list(zip(sources, files, strict=True)), undone
+
+
+@given(mixed_source_undo_cases())
+def test_no_undo_leaves_a_gap_it_did_not_name_across_sources(case):
+    files, undone = case
+    with ledger.isolated():
+        owner, account = _new_member_with_account(HUNTINGTON)
+        batches = [ledger.import_rows(owner, account, shape, file).batch for shape, file in files]
+        named_days = set()
+
+        for done, index in enumerate(undone, start=1):
+            result = undo_import_batch(owner, account.pk, batches[index].pk)
+            for hole in result.holes:
+                assert hole.batch.status == ImportBatch.Status.ACTIVE and hole.batch.pk != batches[index].pk
+                named_days.update(hole.days)
+
+            # A row moves only to a batch of its own source. Where a remaining
+            # file of the other source also holds it, the undo names the day:
+            # every row a remaining file holds is active, or its day was named.
+            expected = Counter()
+            for position, (shape, file) in enumerate(files):
+                if position not in undone[:done]:
+                    expected |= Counter(_key(shape, row) for row in file)
+            active = ledger.content_counter([account])
+            assert not active - expected
+            assert {key[0] for key in expected - active} <= named_days
+            # No row is left active on an undone batch, and none changed source.
+            rows_now = Transaction.objects.filter(account=account, status=Transaction.Status.ACTIVE)
+            assert not rows_now.exclude(import_batch__status=ImportBatch.Status.ACTIVE).exists()
 
 
 # 2. Order doesn't matter.
