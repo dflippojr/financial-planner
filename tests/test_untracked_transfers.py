@@ -13,6 +13,7 @@ from datetime import date
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -32,8 +33,9 @@ from finance.bulk_edit_services import (
 from finance.budget_services import progress_snapshot
 from finance.cash_flow import cash_flow_report, income_by_category_report, selected_accounts, spending_by_category_report
 from finance.category_services import assign_category, assignable_categories
+from finance.lifecycle_services import delete_member_data, share_account, unshare_account
 from finance.ledger_counting import excluded_transfer_ids, income_and_spending_totals
-from finance.refund_links import link_refund
+from finance.refund_links import DROP_SKIPPED_MEMBER, DROP_SKIPPED_PAIR, SAVED_DROP_LABEL, link_refund
 from finance.transfer_pairing import (
     confirm_transfer_pair,
     dismiss_transfer_pair,
@@ -48,6 +50,7 @@ from finance.models import (
     Category,
     CategoryRule,
     RefundLink,
+    RefundLinkDrop,
     RuleApplicationEntry,
     Transaction,
     TransactionCorrectionHistory,
@@ -57,6 +60,7 @@ from finance.monthly_review import compute_monthly_review_facts, review_for_view
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from finance.rule_services import apply_rule, preview_rule, reverse_application, save_category_rule, set_rule_enabled
 from finance.spending_trends import spending_category_trend_report
+from finance.splits import split_transaction
 from finance.untracked_transfers import (
     ALREADY_EXCLUDED,
     INVESTMENT_REFUSED,
@@ -620,3 +624,305 @@ def test_category_and_mark_applications_reverse_independently(world):
     row.refresh_from_db()
     assert row.category_id is None
     assert row.untracked_transfer is False
+
+
+# Undoing a bulk untracked-transfer mark restores the refund links it dropped (#797).
+# Owner decision on #679: a full undo. Rule reversal and single unmarking leave a dropped link dropped.
+
+def _purchase_with_refund(world, description="SYNTHETIC STORE"):
+    owner = world["owner"]
+    purchase = world["txn"](world["shared"], -6_000, description)
+    refund = world["txn"](world["shared"], 1_500, f"{description} REFUND")
+    assign_category(owner, purchase.pk, world["shopping"].pk)
+    link_refund(owner, refund.pk, purchase.pk)
+    return purchase, refund
+
+
+def _bulk_mark(person, rows):
+    _preview, undo = apply_bulk_edit(
+        person, matching=Transaction.objects.none(), transaction_ids=[row.pk for row in rows],
+        action=ACTION_MARK_UNTRACKED,
+    )
+    return undo
+
+
+def _link_history(refund):
+    return list(
+        TransactionCorrectionHistory.objects.filter(
+            transaction=refund, field_name=TransactionCorrectionHistory.Field.REFUND_LINK
+        )
+        .order_by("pk")
+        .values_list("previous_description", "new_description")
+    )
+
+
+def test_undoing_a_bulk_mark_restores_the_refund_link_and_totals(world):
+    owner, member = world["owner"], world["member"]
+    purchase, refund = _purchase_with_refund(world)
+    before = {person.pk: _totals(person) for person in (owner, member)}
+
+    undo = _bulk_mark(member, [purchase])
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _totals(owner) != before[owner.pk]
+
+    undo_bulk_edit(member, undo.pk)
+
+    link = RefundLink.objects.get(refund=refund)
+    assert link.original_id == purchase.pk
+    assert link.original_part_id is None
+    refund.refresh_from_db()
+    assert refund.category == world["shopping"]
+    assert refund.category_source == Transaction.CategorySource.INHERITED
+    assert {person.pk: _totals(person) for person in (owner, member)} == before
+    assert _link_history(refund) == [("unlinked", "linked"), ("linked", "unlinked"), ("unlinked", "linked")]
+
+
+def test_undo_restores_a_link_to_a_split_part(world):
+    owner, household = world["owner"], world["household"]
+    dining = Category.objects.get(household=household, name="Dining")
+    purchase, refund = _purchase_with_refund(world)
+    RefundLink.objects.filter(refund=refund).delete()
+    split_transaction(
+        owner, purchase.pk,
+        [{"amount_minor": -4_000, "category_id": world["shopping"].pk},
+         {"amount_minor": -2_000, "category_id": dining.pk}],
+    )
+    purchase.refresh_from_db()
+    dining_part = purchase.splits.get(category=dining)
+    link_refund(owner, refund.pk, purchase.pk, dining_part.pk)
+    before = _totals(owner)
+
+    undo = _bulk_mark(owner, [purchase])
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    undo_bulk_edit(owner, undo.pk)
+
+    link = RefundLink.objects.get(refund=refund)
+    assert (link.original_id, link.original_part_id) == (purchase.pk, dining_part.pk)
+    refund.refresh_from_db()
+    assert (refund.category, refund.category_source) == (dining, Transaction.CategorySource.INHERITED)
+    assert _totals(owner) == before
+
+
+def _relink_elsewhere(world, refund):
+    other = world["txn"](world["shared"], -9_000, "SYNTHETIC OTHER STORE")
+    link_refund(world["owner"], refund.pk, other.pk)
+
+
+def _recategorize(world, refund):
+    assign_category(world["owner"], refund.pk, world["income"].pk)
+
+
+def _mark_refund(world, refund):
+    mark_untracked_transfer(world["owner"], refund.pk)
+
+
+def _pair_into_a_marked_transfer(world, refund):
+    # Pairing never touches the leg's updated_at, so undo must check marked pairs itself.
+    out_leg = world["txn"](world["private"], -refund.amount_minor, "SYNTHETIC ONLINE TRANSFER TO CHECKING")
+    refresh_transfer_pairs(world["owner"])
+    pair = TransferPair.objects.get(Q(leg_a=refund, leg_b=out_leg) | Q(leg_a=out_leg, leg_b=refund))
+    if pair.status == TransferPair.Status.SUGGESTED:
+        confirm_transfer_pair(world["owner"], pair.pk)
+
+
+def _archive(_world, refund):
+    Transaction.objects.filter(pk=refund.pk).update(status=Transaction.Status.ARCHIVED, archived_at=timezone.now())
+
+
+@pytest.mark.parametrize("change", [_relink_elsewhere, _recategorize, _mark_refund, _pair_into_a_marked_transfer, _archive])
+def test_undo_skips_a_link_whose_refund_changed_since(world, change):
+    owner = world["owner"]
+    purchase, refund = _purchase_with_refund(world)
+    kept_purchase, kept_refund = _purchase_with_refund(world, "SYNTHETIC BOOKSHOP")
+    undo = _bulk_mark(owner, [purchase, kept_purchase])
+
+    change(world, refund)
+    refund.refresh_from_db()
+    state = (refund.category_id, refund.category_source, refund.untracked_transfer, refund.status)
+    link_before = list(RefundLink.objects.filter(refund=refund).values_list("original_id", flat=True))
+    history_before = _link_history(refund)
+
+    undo_bulk_edit(owner, undo.pk)
+
+    # The marks are undone and the untouched link comes back; the changed refund is left as it is.
+    assert not Transaction.objects.filter(pk__in=(purchase.pk, kept_purchase.pk), untracked_transfer=True).exists()
+    assert RefundLink.objects.get(refund=kept_refund).original_id == kept_purchase.pk
+    assert list(RefundLink.objects.filter(refund=refund).values_list("original_id", flat=True)) == link_before
+    refund.refresh_from_db()
+    assert (refund.category_id, refund.category_source, refund.untracked_transfer, refund.status) == state
+    assert _link_history(refund) == history_before
+
+
+def test_single_unmarking_still_leaves_a_dropped_link_dropped(world):
+    owner = world["owner"]
+    purchase, refund = _purchase_with_refund(world)
+    mark_untracked_transfer(owner, purchase.pk)
+    unmark_untracked_transfer(owner, purchase.pk)
+    assert not RefundLink.objects.filter(refund=refund).exists()
+
+
+def test_rule_reversal_still_leaves_a_dropped_link_dropped(world):
+    owner = world["owner"]
+    purchase, refund = _purchase_with_refund(world)
+    application, _ = apply_rule(owner, _untracked_rule(owner, "synthetic store").pk)
+    purchase.refresh_from_db()
+    assert purchase.untracked_transfer is True
+    assert reverse_application(owner, application.pk).restored == 1
+    purchase.refresh_from_db()
+    assert purchase.untracked_transfer is False
+    assert not RefundLink.objects.filter(refund=refund).exists()
+
+
+# Links that stood beside a marked transfer pair before the mark (#797, liaison decision on #809):
+# undo restores the stored RefundLinkDrop rows verbatim and never re-derives them under today's rules.
+
+
+def _purchase_paired_for_owner(world, refund_account=None):
+    """A shared purchase paired with the owner's private account, so only the owner sees it left out.
+
+    The member links its refund, so the pair rule drops that link for the owner alone.
+    """
+    owner, member = world["owner"], world["member"]
+    purchase = world["txn"](world["shared"], -6_000, "SYNTHETIC ONLINE TRANSFER TO SAVINGS")
+    world["txn"](world["private"], 6_000, "SYNTHETIC ONLINE TRANSFER FROM CHECKING")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get(Q(leg_a=purchase) | Q(leg_b=purchase))
+    if pair.status == TransferPair.Status.SUGGESTED:
+        confirm_transfer_pair(owner, pair.pk)
+    refund = world["txn"](refund_account or world["shared"], 1_500, "SYNTHETIC SAVINGS REFUND")
+    link_refund(member, refund.pk, purchase.pk)
+    assert _drops(refund) == [(owner.pk, pair.pk)]
+    return purchase, refund, pair
+
+
+def _drops(refund):
+    return sorted(RefundLinkDrop.objects.filter(link__refund=refund).values_list("person_id", "pair_id"))
+
+
+def _member_totals(world):
+    return {name: _totals(world[name]) for name in ("owner", "member")}
+
+
+def _shift(totals, income=0, spending=0):
+    return (totals[0] + income, totals[1] + spending)
+
+
+def test_undo_restores_a_link_and_its_drop_beside_a_pair_marked_for_another_member(world):
+    purchase, refund, pair = _purchase_paired_for_owner(world)
+    before = _member_totals(world)
+
+    undo = _bulk_mark(world["member"], [purchase])
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    # The owner already left the purchase out and counted the refund as income; the member now does too.
+    assert _member_totals(world) == {
+        "owner": before["owner"], "member": _shift(before["member"], income=1_500, spending=-4_500),
+    }
+    undo_bulk_edit(world["member"], undo.pk)
+
+    assert RefundLink.objects.get(refund=refund).original_id == purchase.pk
+    assert _drops(refund) == [(world["owner"].pk, pair.pk)]
+    assert _member_totals(world) == before
+
+
+def test_undo_restores_a_link_and_drop_kept_when_the_refund_account_was_unshared(world):
+    owner, member = world["owner"], world["member"]
+    cards = make_account(owner, name="Owner Card", scope=Account.Scope.HOUSEHOLD, household=world["household"])
+    purchase, refund, pair = _purchase_paired_for_owner(world, refund_account=cards)
+    # Unsharing keeps the link and the owner's drop (#579), though the owner is now the refund's only viewer.
+    unshare_account(owner, cards.pk)
+    assert _drops(refund) == [(owner.pk, pair.pk)]
+    before = _member_totals(world)
+
+    undo = _bulk_mark(member, [purchase])
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _member_totals(world) == {"owner": before["owner"], "member": _shift(before["member"], spending=-6_000)}
+    undo_bulk_edit(member, undo.pk)
+
+    # Today's pair rule would delete this link; the stored state comes back instead.
+    assert RefundLink.objects.get(refund=refund).original_id == purchase.pk
+    assert _drops(refund) == [(owner.pk, pair.pk)]
+    assert _member_totals(world) == before
+
+
+def test_undo_restores_the_link_without_the_drop_of_a_pair_undone_since(world):
+    owner, member = world["owner"], world["member"]
+    purchase, refund, pair = _purchase_paired_for_owner(world)
+    before = _member_totals(world)
+
+    undo = _bulk_mark(member, [purchase])
+    after_mark = _member_totals(world)
+    assert after_mark == {"owner": before["owner"], "member": _shift(before["member"], income=1_500, spending=-4_500)}
+    undo_transfer_pair(owner, pair.pk)
+    undo_bulk_edit(member, undo.pk)
+
+    assert RefundLink.objects.get(refund=refund).original_id == purchase.pk
+    assert _drops(refund) == []
+    # With the pair gone the owner counts both legs and the refund offsets the purchase, as the member does.
+    assert _member_totals(world) == {
+        "owner": _shift(before["owner"], income=6_000 - 1_500, spending=6_000 - 1_500), "member": before["member"],
+    }
+
+
+def test_undo_skips_a_link_whose_purchase_joined_a_marked_pair_since(world):
+    owner, member = world["owner"], world["member"]
+    purchase, refund = _purchase_with_refund(world, "SYNTHETIC ONLINE TRANSFER TO SAVINGS")
+    before = _member_totals(world)
+
+    undo = _bulk_mark(member, [purchase])
+    assert _member_totals(world) == {
+        name: _shift(totals, income=1_500, spending=-4_500) for name, totals in before.items()
+    }
+    world["txn"](world["private"], 6_000, "SYNTHETIC ONLINE TRANSFER FROM CHECKING")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get(Q(leg_a=purchase) | Q(leg_b=purchase))
+    if pair.status == TransferPair.Status.SUGGESTED:
+        confirm_transfer_pair(owner, pair.pk)
+    history = _link_history(refund)
+    undo_bulk_edit(member, undo.pk)
+
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    assert _link_history(refund) == history
+    # The owner leaves the new pair out; the member, who cannot see its other leg, counts the purchase again.
+    assert _member_totals(world) == {
+        "owner": _shift(before["owner"], income=1_500, spending=-4_500),
+        "member": _shift(before["member"], income=1_500, spending=1_500),
+    }
+
+
+def _skip_history(refund):
+    return sorted(
+        TransactionCorrectionHistory.objects.filter(
+            transaction=refund, field_name=TransactionCorrectionHistory.Field.REFUND_LINK,
+            previous_description=SAVED_DROP_LABEL,
+        ).values_list("only_for_id", "new_description")
+    )
+
+
+def test_undo_skips_visibly_a_drop_whose_pair_was_undone_since(world):
+    owner, member = world["owner"], world["member"]
+    purchase, refund, pair = _purchase_paired_for_owner(world)
+    undo = _bulk_mark(member, [purchase])
+    undo_transfer_pair(owner, pair.pk)
+    undo_bulk_edit(member, undo.pk)
+
+    assert _drops(refund) == []
+    # Only the member the drop was for learns it was not restored.
+    assert _skip_history(refund) == [(owner.pk, DROP_SKIPPED_PAIR)]
+
+
+def test_undo_skips_visibly_a_drop_whose_member_deleted_their_data(world):
+    # Review r3 on #809: the other leg's owner shares that account co-owned and deletes their data.
+    owner, member = world["owner"], world["member"]
+    purchase, refund, pair = _purchase_paired_for_owner(world)
+    undo = _bulk_mark(member, [purchase])
+    share_account(owner, world["private"].pk, Account.ShareMode.CO_OWNED)
+    delete_member_data(owner)
+    assert TransferPair.objects.excluding_income_and_spending().filter(pk=pair.pk).exists()
+
+    undo_bulk_edit(member, undo.pk)
+
+    assert RefundLink.objects.get(refund=refund).original_id == purchase.pk
+    assert _drops(refund) == []
+    # The member who remains, and now sees both legs, is told the drop was not restored.
+    assert _skip_history(refund) == [(member.pk, DROP_SKIPPED_MEMBER)]
+    assert not Transaction.objects.filter(pk=purchase.pk, untracked_transfer=True).exists()
