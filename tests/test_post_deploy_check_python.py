@@ -452,3 +452,15 @@ def test_invalid_inspect_timestamp_fails_closed_with_explicit_since(rig, field, 
     target[field] = value
     assert rig.checker.run() == 1
     assert any(f"cannot parse app {field} timestamp" in failure for failure in rig.checker.failures)
+
+
+@pytest.mark.parametrize("digits", range(1, 10))
+@pytest.mark.parametrize("whole,zone", [("2026-11-24T12:00:00", "Z"), ("2026-11-24T07:00:00", "-05:00")])
+def test_python310_normalizes_fraction_for_dates_but_keeps_exact_event_nanoseconds(
+    python310_datetime, digits, whole, zone,
+):
+    fraction = "123456789"[:digits]
+    text = f"{whole}.{fraction}{zone}"
+    expected = datetime(2026, 11, 24, 12, 0, 0, int(fraction[:6].ljust(6, "0")), tzinfo=UTC)
+    assert check.parse_time(text) == expected
+    assert check.unix_nanoseconds(text) == 1795521600 * 10**9 + int(fraction.ljust(9, "0"))

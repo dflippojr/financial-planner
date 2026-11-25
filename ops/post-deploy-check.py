@@ -46,12 +46,28 @@ def native(*args):
 
 
 def parse_time(value):
-    if not isinstance(value, str) or not TIME_PATTERN.fullmatch(value):
+    match = TIME_PATTERN.fullmatch(value) if isinstance(value, str) else None
+    if not match:
         return None
+    whole, fraction, zone = match.groups()
+    # Python 3.10 accepts only three or six fractional digits and no trailing Z.
+    # Date arithmetic needs microseconds; unix_nanoseconds keeps all nine digits
+    # from the original value for the independent event comparison.
+    fractional = "." + fraction[:6].ljust(6, "0") if fraction else ""
+    offset = "+00:00" if zone == "Z" else zone
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
+        return datetime.fromisoformat(whole + fractional + offset).astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return None
+
+
+def container_time(value, service, field):
+    parsed = parse_time(value)
+    if parsed is None:
+        # An unknown creation date would silently exclude this container from
+        # both the since-deploy restart check and the event evidence check.
+        raise CheckError(f"containers: cannot parse {service} {field} timestamp")
+    return parsed
 
 
 def unix_nanoseconds(value):
@@ -124,10 +140,10 @@ class Checker:
                     "service": service, "id": cid, "status": state["Status"],
                     "restart_count": int(info["RestartCount"]),
                     "started_at": state["StartedAt"],
-                    "started": parse_time(state["StartedAt"]),
+                    "started": container_time(state["StartedAt"], service, "StartedAt"),
                     "started_ns": unix_nanoseconds(state["StartedAt"]),
                     "finished_at": state.get("FinishedAt"),
-                    "created": parse_time(info["Created"]),
+                    "created": container_time(info["Created"], service, "Created"),
                     "revision": (info["Config"].get("Labels") or {}).get(REVISION_LABEL),
                 })
         return snapshot
