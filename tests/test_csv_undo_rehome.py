@@ -448,6 +448,53 @@ def test_a_row_whose_date_was_corrected_into_range_is_not_matched(client):
     assert "still marked as covered" not in page
 
 
+def test_undoing_a_reimport_names_an_earlier_batch_from_before_the_record(client):
+    user, person = make_owner()
+    account = make_account(person)
+    first = commit(user, account, COFFEE)
+    legacy = commit(user, account, COFFEE)
+    # Both batches were committed before migration 0093: nothing says the second skipped the row.
+    ImportBatch.objects.filter(pk__in=[first.batch.pk, legacy.batch.pk]).update(
+        skipped_duplicates=None, date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30)
+    )
+    warning = (
+        "1 removed row dated 2026-09-28 is still marked as covered by the Huntington Bank import "
+        "for 2026-09-01 to 2026-09-30. Import that file again to restore it."
+    )
+    assert warning in undo_page(client, user, account, first.batch)
+    again = commit(user, account, COFFEE)
+    assert again.new_count == 1
+
+    page = undo_page(client, user, account, again.batch)
+
+    # The row was never re-homed and the old batch is earlier than the one undone;
+    # it still marks the day covered, so it is named all the same.
+    assert not Transaction.objects.filter(account=account, status=Transaction.Status.ACTIVE).exists()
+    assert warning in page
+
+
+def test_undo_names_every_batch_from_before_the_record_earlier_and_later(client):
+    user, person = make_owner()
+    account = make_account(person)
+    legacy_september_batch(user, account, BAKERY)
+    middle = commit(user, account, COFFEE)
+    later = commit(user, account, COFFEE, FUEL)
+    ImportBatch.objects.filter(pk=later.batch.pk).update(
+        skipped_duplicates=None, date_range_start=date(2026, 9, 15), date_range_end=date(2026, 10, 31)
+    )
+
+    page = undo_page(client, user, account, middle.batch)
+
+    assert (
+        "1 removed row dated 2026-09-28 is still marked as covered by the Huntington Bank import "
+        "for 2026-09-01 to 2026-09-30. Import that file again to restore it."
+    ) in page
+    assert (
+        "1 removed row dated 2026-09-28 is still marked as covered by the Huntington Bank import "
+        "for 2026-09-15 to 2026-10-31. Import that file again to restore it."
+    ) in page
+
+
 def test_undo_locks_the_counterpart_account_of_a_row_another_undo_moved_into_the_batch(monkeypatch):
     """Batch membership is read under the account lock, not before it.
 
