@@ -10,7 +10,13 @@ from .access import DENIED as _DENIED
 from .category_services import apply_manual_category, assignable_categories
 from .ledger_counting import exclusion_exists_for
 from .ledger_edits import history_label, record_text_history
-from .refund_links import apply_inherited_category, linked_refunds_for_originals, transaction_is_linked_refund
+from .refund_links import (
+    apply_inherited_category,
+    dropped_refund_links,
+    linked_refunds_for_originals,
+    restore_dropped_refund_links,
+    transaction_is_linked_refund,
+)
 from .audit_services import origin, record as audit_record
 from .lifecycle_services import lock_actor_household
 from .models import (
@@ -250,27 +256,32 @@ def preview_bulk_edit(
     )
 
 
-def _lock_rows(person, transactions, *, with_refunds=False):
+def _lock_rows(person, transactions, *, with_refunds=False, optional_ids=()):
     """Lock the rows, plus their linked refunds when asked.
 
     Refunds are looked up only after the household lock: linking a refund takes
     the same lock first, so none can be linked between the lookup and the locks.
+    `optional_ids` are locked in the same pass whatever their state or the
+    actor's view of them, and returned apart: undo checks them itself (#797).
     """
     lock_actor_household(person)
     extra = linked_refunds_for_originals(person, transactions) if with_refunds else []
     required_ids = sorted({item.pk for item in transactions})
     all_items = list(transactions) + [item for item in extra if item.pk not in set(required_ids)]
-    account_ids = sorted({item.account_id for item in all_items})
+    ids = sorted({item.pk for item in all_items})
+    optional = list(Transaction.objects.filter(pk__in=optional_ids).exclude(pk__in=ids).only("pk", "account_id"))
+    account_ids = sorted({item.account_id for item in all_items + optional})
     if account_ids:
         list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
-    ids = sorted({item.pk for item in all_items})
-    locked = list(
+    rows = list(
         Transaction.objects.select_for_update(of=("self",))
         .select_related("account", "category", "refund_link")
         .prefetch_related("tags")
-        .filter(pk__in=ids, status=Transaction.Status.ACTIVE)
+        .filter(pk__in=sorted(set(ids) | {item.pk for item in optional}))
         .order_by("pk")
     )
+    locked = [txn for txn in rows if txn.pk in set(ids) and txn.status == Transaction.Status.ACTIVE]
+    optional_locked = {txn.pk: txn for txn in rows if txn.pk not in set(ids)}
     if len(locked) != len(ids):
         raise PermissionDenied(_DENIED)
     visible = set(_visible_active(person).filter(pk__in=required_ids).values_list("pk", flat=True))
@@ -286,7 +297,7 @@ def _lock_rows(person, transactions, *, with_refunds=False):
     }
     for txn in locked:
         txn._excluded = txn.pk in excluded
-    return locked, extra
+    return locked, extra, optional_locked
 
 
 def _append_note(txn, note_line):
@@ -356,6 +367,21 @@ def _row_snapshot(txn, action):
     return payload
 
 
+def _note_refund_updated_at(links):
+    """Store each dropped link's refund `updated_at` after the drop, for undo's changed-since check."""
+    if not links:
+        return
+    stamps = dict(
+        Transaction.objects.filter(pk__in=[link["refund_id"] for link in links]).values_list("pk", "updated_at")
+    )
+    for link in links:
+        link["refund_updated_at"] = stamps[link["refund_id"]].isoformat()
+
+
+def _saved_refund_ids(rows):
+    return sorted({link["refund_id"] for item in rows for link in item.get("dropped_refund_links", [])})
+
+
 BULK_AUDIT_FIELDS = {
     ACTION_CATEGORY: ("category",), ACTION_ADD_TAGS: ("tags",), ACTION_REMOVE_TAGS: ("tags",),
     ACTION_MARK_UNTRACKED: ("untracked_transfer",), ACTION_UNMARK_UNTRACKED: ("untracked_transfer",),
@@ -411,7 +437,7 @@ def apply_bulk_edit(
     category = _category_for(person, category_id) if action == ACTION_CATEGORY else None
     tags = _tags_for(person, tag_ids) if action in (ACTION_ADD_TAGS, ACTION_REMOVE_TAGS) else []
     unlocked = list(_visible_active(person).filter(pk__in=preview.eligible_ids).order_by("pk"))
-    locked, refunds = _lock_rows(person, unlocked, with_refunds=action == ACTION_CATEGORY)
+    locked, refunds, _optional = _lock_rows(person, unlocked, with_refunds=action == ACTION_CATEGORY)
     by_id = {txn.pk: txn for txn in locked}
     eligible = []
     for pk in preview.eligible_ids:
@@ -440,11 +466,14 @@ def apply_bulk_edit(
             elif action == ACTION_REMOVE_TAGS:
                 _apply_tags(person, txn, tags, add=False)
             elif action in UNTRACKED_ACTIONS:
+                if action == ACTION_MARK_UNTRACKED:
+                    before["dropped_refund_links"] = dropped_refund_links([txn.pk])
                 set_mark(person, txn, action == ACTION_MARK_UNTRACKED)
             else:
                 _apply_note(person, txn, note_line)
             txn.refresh_from_db()
             before["applied_updated_at"] = txn.updated_at.isoformat()
+            _note_refund_updated_at(before.get("dropped_refund_links"))
             snapshots.append(before)
     _record_bulk(person, AuditEvent.Action.BULK_APPLIED, eligible, operation_id, action)
     undo = BulkEditUndo.objects.create(
@@ -478,7 +507,9 @@ def undo_bulk_edit(principal, undo_id):
     unlocked = list(_visible_active(person).filter(pk__in=ids))
     if len(unlocked) != len(ids):
         raise ValidationError(CHANGED_SINCE)
-    locked, refunds = _lock_rows(person, unlocked, with_refunds=action == ACTION_CATEGORY)
+    locked, refunds, saved_refunds = _lock_rows(
+        person, unlocked, with_refunds=action == ACTION_CATEGORY, optional_ids=_saved_refund_ids(rows)
+    )
     by_id = {txn.pk: txn for txn in locked}
     for item in rows:
         txn = by_id.get(item["id"])
@@ -543,6 +574,9 @@ def undo_bulk_edit(principal, undo_id):
                 )
             elif action in UNTRACKED_ACTIONS:
                 set_mark(person, txn, item["previous_untracked_transfer"])
+                # Full undo (#679): links the mark dropped come back unless a row moved since.
+                # Undo records written before #797 have no saved links.
+                restore_dropped_refund_links(txn, item.get("dropped_refund_links", []), saved_refunds, person)
     record.undone_at = timezone.now()
     record.save(update_fields=("undone_at",))
     _record_bulk(person, AuditEvent.Action.BULK_UNDONE, [by_id[item["id"]] for item in rows], record.pk, action)

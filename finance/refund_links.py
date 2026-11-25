@@ -2,7 +2,8 @@
 
 A link lasts only while its original counts (#570): archiving the original
 deletes it, and marking the original as a transfer leg drops it for the
-viewers who see both legs until the pair is unmarked.
+viewers who see both legs until the pair is unmarked. Marking the original as an
+untracked transfer deletes it too; undoing a bulk mark restores it (#797).
 """
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -260,6 +261,65 @@ def restore_refund_links_for_pair(pair, actor):
     for link_id, person_id in cleared:
         if (link_id, person_id) not in still_dropped:
             _record_member_link_history(links[link_id].refund, actor, person_id, "unlinked", "linked")
+
+
+def dropped_refund_links(original_ids):
+    """The links of these originals, as `restore_dropped_refund_links` takes them back.
+
+    Read under the originals' row locks, before the mark drops them (#797).
+    """
+    return list(
+        RefundLink.objects.filter(original_id__in=original_ids)
+        .order_by("pk")
+        .values("refund_id", "original_part_id")
+    )
+
+
+def _marked_leg_ids(transaction_ids):
+    marked = TransferPair.objects.excluding_income_and_spending()  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other excluding_income_and_spending calls in the baseline
+    legs = marked.filter(Q(leg_a_id__in=transaction_ids) | Q(leg_b_id__in=transaction_ids))
+    return {leg for pair in legs.values_list("leg_a_id", "leg_b_id") for leg in pair}
+
+
+def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
+    """Link refunds back to `original` after a bulk mark is undone (#797).
+
+    Owner decision on #679: undoing a bulk untracked-transfer mark is a full
+    undo. `saved_links` are the links the mark dropped, each with the refund's
+    `updated_at` read after the drop. A link comes back only when nothing has
+    moved since: the refund is still active, unlinked and unedited, a split part
+    still exists, and neither row is a leg of a marked transfer pair, which
+    `link_refund` would refuse or drop. Any other link is skipped, so the refund
+    keeps counting as income, and the undo goes on: a refusal would tell the
+    actor that a row they may not see has changed. The caller holds the row
+    locks of `original` and of every refund in `refunds_by_id`, and has already
+    unmarked `original`. Returns the number of links restored.
+    """
+    if not saved_links:
+        return 0
+    refund_ids = [item["refund_id"] for item in saved_links]
+    linked = set(RefundLink.objects.filter(refund_id__in=refund_ids).values_list("refund_id", flat=True))
+    marked_legs = _marked_leg_ids([original.pk, *refund_ids])
+    part_ids = set(TransactionSplit.objects.filter(transaction=original).values_list("pk", flat=True))
+    restored = 0
+    for item in saved_links:
+        refund = refunds_by_id.get(item["refund_id"])
+        part_id = item["original_part_id"]
+        if (
+            refund is None
+            or refund.status != Transaction.Status.ACTIVE
+            or refund.updated_at.isoformat() != item["refund_updated_at"]
+            or refund.pk in linked
+            or (part_id is not None and part_id not in part_ids)
+            or {original.pk, refund.pk} & marked_legs
+        ):
+            continue
+        RefundLink.objects.create(refund=refund, original=original, original_part_id=part_id)
+        record_text_history(refund, actor, TransactionCorrectionHistory.Field.REFUND_LINK, "unlinked", "linked")
+        restored += 1
+    if restored:
+        restore_refund_categories(original, actor)
+    return restored
 
 
 def restore_refund_categories(original, actor, record_history=record_text_history):
