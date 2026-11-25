@@ -302,6 +302,33 @@ def dropped_refund_links(original_ids):
     return links
 
 
+def lock_saved_drop_rows(saved_links):
+    """Lock the members and pairs that saved drops name, and return those that still exist.
+
+    Review r4 on #809: the caller already holds the household and row locks,
+    and takes these next, in pk order, before anything checks them. A
+    concurrent member deletion or pair delete then either committed first, so
+    the row is gone here and its drop is skipped visibly, or waits for the undo.
+    Returns (existing person ids, {pair id: pair}).
+    """
+    drops = [drop for item in saved_links for drop in item.get("drops", [])]
+    if not drops:
+        return set(), {}
+    person_ids = sorted({person_id for person_id, _pair_id in drops})
+    pair_ids = sorted({pair_id for _person_id, pair_id in drops})
+    people = set(
+        Person.objects.select_for_update().filter(pk__in=person_ids).order_by("pk").values_list("pk", flat=True)
+    )
+    pairs = {
+        pair.pk: pair
+        for pair in TransferPair.objects.select_for_update(of=("self",))
+        .select_related("leg_a__account", "leg_b__account")
+        .filter(pk__in=pair_ids)
+        .order_by("pk")
+    }
+    return people, pairs
+
+
 def _skipped_drop_readers(link, person_id, pair, person_exists):
     """Who is told that a saved drop was not restored: the remaining member, never anyone new.
 
@@ -319,7 +346,7 @@ def _skipped_drop_readers(link, person_id, pair, person_exists):
     return sorted(readers)
 
 
-def _restore_drops(link, saved_drops, actor):
+def _restore_drops(link, saved_drops, locked_rows, actor):
     """Put back each saved drop whose member and pair exist and whose pair is still marked.
 
     Owner decisions on #809: the drops come back as they were, never re-derived
@@ -332,14 +359,8 @@ def _restore_drops(link, saved_drops, actor):
     """
     if not saved_drops:
         return
+    existing_people, pairs = locked_rows
     pair_ids = {pair_id for _person_id, pair_id in saved_drops}
-    existing_people = set(Person.objects.filter(pk__in={pid for pid, _pair in saved_drops}).values_list("pk", flat=True))
-    pairs = {
-        pair.pk: pair
-        for pair in TransferPair.objects.filter(pk__in=pair_ids).select_related(
-            "leg_a__account", "leg_b__account"
-        )
-    }
     still_marked = set(_marked_pairs_touching((link.original_id,)).filter(pk__in=pair_ids).values_list("pk", flat=True))
     restored_for = set()
     told = set()
@@ -358,7 +379,7 @@ def _restore_drops(link, saved_drops, actor):
                 _record_member_link_history(link.refund, actor, reader, SAVED_DROP_LABEL, reason)
 
 
-def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
+def restore_dropped_refund_links(original, saved_links, refunds_by_id, locked_drop_rows, actor):
     """Link refunds back to `original` after a bulk mark is undone (#797).
 
     Owner decision on #679: undoing a bulk untracked-transfer mark is a full
@@ -371,7 +392,8 @@ def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
     and the undo goes on: a refusal would tell the actor that a row they may not
     see has changed. A restored link gets its stored drops back verbatim
     (`_restore_drops`). The caller holds the row locks of `original` and of
-    every refund in `refunds_by_id`, and has already unmarked `original`.
+    every refund in `refunds_by_id`, passes what `lock_saved_drop_rows`
+    returned for every saved link, and has already unmarked `original`.
     Returns the number of links restored.
     """
     if not saved_links:
@@ -395,7 +417,7 @@ def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
             continue
         link = RefundLink.objects.create(refund=refund, original=original, original_part_id=part_id)
         record_text_history(refund, actor, TransactionCorrectionHistory.Field.REFUND_LINK, "unlinked", "linked")
-        _restore_drops(link, item.get("drops", []), actor)
+        _restore_drops(link, item.get("drops", []), locked_drop_rows, actor)
         restored += 1
     if restored:
         restore_refund_categories(original, actor)

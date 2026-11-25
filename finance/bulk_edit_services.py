@@ -14,6 +14,7 @@ from .refund_links import (
     apply_inherited_category,
     dropped_refund_links,
     linked_refunds_for_originals,
+    lock_saved_drop_rows,
     restore_dropped_refund_links,
     transaction_is_linked_refund,
 )
@@ -511,6 +512,10 @@ def undo_bulk_edit(principal, undo_id):
         person, unlocked, with_refunds=action == ACTION_CATEGORY, optional_ids=_saved_refund_ids(rows)
     )
     by_id = {txn.pk: txn for txn in locked}
+    # Members and pairs that saved refund link drops name, locked before anything reads them (#797).
+    locked_drop_rows = lock_saved_drop_rows(
+        [link for item in rows for link in item.get("dropped_refund_links", [])]
+    )
     for item in rows:
         txn = by_id.get(item["id"])
         if txn is None:
@@ -576,7 +581,9 @@ def undo_bulk_edit(principal, undo_id):
                 set_mark(person, txn, item["previous_untracked_transfer"])
                 # Full undo (#679): links the mark dropped come back unless a row moved since.
                 # Undo records written before #797 have no saved links.
-                restore_dropped_refund_links(txn, item.get("dropped_refund_links", []), saved_refunds, person)
+                restore_dropped_refund_links(
+                    txn, item.get("dropped_refund_links", []), saved_refunds, locked_drop_rows, person
+                )
     record.undone_at = timezone.now()
     record.save(update_fields=("undone_at",))
     _record_bulk(person, AuditEvent.Action.BULK_UNDONE, [by_id[item["id"]] for item in rows], record.pk, action)
