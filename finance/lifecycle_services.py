@@ -6,7 +6,7 @@ from django.utils import timezone
 from .access import DENIED as _DENIED
 from .access import require_person as _person_for
 from .account_locks import AccountSetGrew as _AccountSetGrew
-from .account_locks import holding_accounts, lock_account, lock_accounts
+from .account_locks import holding_accounts, lock_account, lock_accounts, update_accounts
 from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
 from .models import (
     AiPlanLink,
@@ -526,7 +526,8 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
     if not remaining_memberships:
         transitions = [(account, *unshared) for account in household_accounts]
         if account_ids:
-            Account.objects.filter(pk__in=account_ids).update(
+            update_accounts(
+                Account.objects.filter(pk__in=account_ids),
                 owner_id=person.pk,
                 scope=Account.Scope.PRIVATE,
                 household=None,
@@ -548,14 +549,16 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
     transitions = [(account, *unshared) for account in lent]
     transitions += [(account, AuditEvent.Action.ACCOUNT_OWNER_CHANGED, ("owner",)) for account in co_owned]
     if lent_ids:
-        Account.objects.filter(pk__in=lent_ids).update(
+        update_accounts(
+            Account.objects.filter(pk__in=lent_ids),
             scope=Account.Scope.PRIVATE,
             household=None,
             share_mode="",
             updated_at=transitioned_at,
         )
     if co_owned_ids:
-        Account.objects.filter(pk__in=co_owned_ids).update(
+        update_accounts(
+            Account.objects.filter(pk__in=co_owned_ids),
             owner_id=successor_id,
             updated_at=transitioned_at,
         )
@@ -805,7 +808,8 @@ def _handover_lent_accounts(lent, submitted, successor):
     if handover_ids and successor is None:
         raise ValidationError("Every lent account needs a choice.")
     if handover_ids:
-        Account.objects.filter(pk__in=handover_ids).update(
+        update_accounts(
+            Account.objects.filter(pk__in=handover_ids),
             share_mode=Account.ShareMode.CO_OWNED,
             updated_at=timezone.now(),
         )
@@ -847,7 +851,7 @@ def _release_household_owned_rows(person):
             )
             if mine:
                 ImportBatch.objects.filter(saved_csv_mapping_id__in=mine).update(saved_csv_mapping=None)
-                Account.objects.filter(default_saved_csv_mapping_id__in=mine).update(default_saved_csv_mapping=None)
+                update_accounts(Account.objects.filter(default_saved_csv_mapping_id__in=mine), default_saved_csv_mapping=None)
                 SavedCsvMapping.objects.filter(pk__in=mine).delete()
             continue
         successor = successor_membership.person
@@ -964,7 +968,7 @@ def _tear_down_household(household_id):
     mapping_ids = list(SavedCsvMapping.objects.filter(household_id=household_id).values_list("pk", flat=True))
     if mapping_ids:
         ImportBatch.objects.filter(saved_csv_mapping_id__in=mapping_ids).update(saved_csv_mapping=None)
-        Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids).update(default_saved_csv_mapping=None)
+        update_accounts(Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids), default_saved_csv_mapping=None)
         SavedCsvMapping.objects.filter(pk__in=mapping_ids).delete()
     Category.objects.filter(household_id=household_id).delete()
     Invitation.objects.filter(household_id=household_id).delete()

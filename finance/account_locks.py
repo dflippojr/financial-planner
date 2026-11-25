@@ -72,3 +72,27 @@ def lock_account(account_id, *, queryset=None, of_self=False) -> Any:
     """Lock one account as lock_accounts does; returns it, or None when `queryset` leaves it out."""
     rows = lock_accounts((account_id,), queryset=queryset, of_self=of_self)
     return rows[0] if rows else None
+
+
+def update_accounts(queryset, **fields):
+    """Run `queryset.update(**fields)` on Account rows, checking the guard first (review r6 on #811).
+
+    An UPDATE takes each row's lock like `SELECT ... FOR UPDATE`, so inside a
+    member deletion every account it would write must be held. The rows are
+    read first and the guard checks them; the UPDATE then keeps the queryset's
+    own filter and is limited to those rows. Returns the number updated.
+    """
+    ids = list(queryset.values_list("pk", flat=True))
+    if not ids:
+        return 0
+    _require_held_accounts(ids)
+    return queryset.filter(pk__in=ids).update(**fields)
+
+
+def delete_accounts(queryset):
+    """Delete these Account rows, checking the guard first, as update_accounts does."""
+    ids = list(queryset.values_list("pk", flat=True))
+    if not ids:
+        return 0, {}
+    _require_held_accounts(ids)
+    return queryset.filter(pk__in=ids).delete()

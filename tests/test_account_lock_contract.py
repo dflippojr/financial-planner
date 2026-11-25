@@ -119,6 +119,8 @@ def _local_assignments(function):
             assigned.setdefault(node.targets[0].id, []).append(node.value)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
             assigned.setdefault(node.target.id, []).append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            assigned.setdefault(node.target.id, []).append(node.value)  # condition |= Q(...)
     return assigned
 
 
@@ -153,18 +155,45 @@ PATH_METHODS = {"filter", "exclude", "get", "order_by", "values", "values_list",
 PATH_CALLS = {"F", "Q", "Count", "Sum", "Min", "Max", "Avg", "OuterRef"}
 
 
-def _paths(calls):
-    """(select_related paths, filter-style paths, whether some expression could not be read)."""
+def _paths(calls, assigned=None):
+    """(select_related paths, filter-style paths, whether some expression could not be read).
+
+    A name in a path position (a positional filter argument, an annotation, a
+    Q's positional argument) is followed to what the enclosing function
+    assigned to it; one it cannot follow (a parameter, a global) makes the
+    query unreadable, so the lock fails closed (review r6 F2 on #811). A name
+    used as a filter value is followed too, but a parameter there is a plain
+    value.
+    """
+    assigned = assigned or {}
     selected, filtered, opaque = [], [], False
+    following = set()
+
+    def follow(name, visit):
+        if name in following:
+            return True
+        following.add(name)
+        try:
+            for assigned_value in assigned.get(name, ()):
+                visit(assigned_value)
+        finally:
+            following.discard(name)
+        return name in assigned
 
     def value(node):
         """A filter value: only F, Q and aggregate calls inside it name paths; anything else is compared against."""
         for inner in ast.walk(node):
             if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) and inner.func.id in PATH_CALLS:
                 expression(inner)
+            elif isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load):
+                follow(inner.id, value)
 
     def expression(node):
         nonlocal opaque
+        if isinstance(node, ast.Name):
+            if not follow(node.id, expression):
+                opaque = True
+            return
         if isinstance(node, ast.Constant):
             return
         if isinstance(node, ast.BinOp):
@@ -184,8 +213,11 @@ def _paths(calls):
                 else:
                     filtered.append(keyword.arg)
                     value(keyword.value)
-        elif isinstance(node, (ast.Name, ast.Attribute, ast.List, ast.Tuple, ast.Set)):
-            return  # a value compared against, not a path
+        elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            for element in node.elts:
+                expression(element)
+        elif isinstance(node, ast.Attribute):
+            opaque = True  # self.condition, module.CONDITION: not followed
         else:
             opaque = True
 
@@ -296,7 +328,8 @@ def _scan_source(relative, source):
         lock = locks[0]
         function = enclosing.get(id(lock))
         where = (relative, function.name if function is not None else "<module>", lock.lineno)
-        model, all_calls = _receiver(module, node, _local_assignments(function))
+        assigned = _local_assignments(function)
+        model, all_calls = _receiver(module, node, assigned)
         if model is None:
             yield (*where, "generic")
             continue
@@ -312,7 +345,7 @@ def _scan_source(relative, source):
                    for target in targets):
                 yield (*where, "joined account")
             continue
-        selected, filtered, opaque = _paths(all_calls)
+        selected, filtered, opaque = _paths(all_calls, assigned)
         if any(_reaches_account(model, path, module.account, select=True) for path in selected) or any(
             _reaches_account(model, path, module.account, select=False) for path in filtered
         ):
