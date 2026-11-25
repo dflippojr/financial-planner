@@ -11,7 +11,7 @@ ROOT = Path(__file__).parents[1]
 
 @pytest.mark.parametrize("relative", [
     "README.md", "docs/deployment.md", "docs/production-signals.md",
-    "docs/review-runner.md", "docs/requirements.md", ".env.example",
+    "docs/review-runner.md", "docs/requirements.md", "docs/architecture.md", ".env.example",
 ])
 def test_operator_docs_use_linux_instead_of_retired_host_steps(relative):
     text = (ROOT / relative).read_text(encoding="utf-8", errors="replace")
