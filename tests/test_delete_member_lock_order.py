@@ -202,20 +202,44 @@ def _member_with_every_kind_of_counterpart():
         amount_column="Amount", created_by=leaver,
     )
     Account.objects.filter(pk=mapped.pk).update(default_saved_csv_mapping=mapping)
-    touched = {shared.pk, lent.pk, private.pk, paired.pk, refunds.pk, loan.pk, mapped.pk}
-    return leaver, lent, touched, untouched
+    # The member stays current, so the mapping is handed over and `mapped` keeps its default: not written.
+    touched = {shared.pk, lent.pk, private.pk, paired.pk, refunds.pk, loan.pk}
+    return leaver, lent, touched, {untouched.pk, mapped.pk}
 
 
 @pytest.mark.django_db
 def test_the_first_lock_pass_covers_every_account_the_deletion_reaches():
     leaver, _lent, touched, untouched = _member_with_every_kind_of_counterpart()
-    own, memberships = lifecycle_services.lock_actor_household(leaver)
-    remaining = [membership for membership in memberships if membership.pk != own.pk]
+    own, _memberships = lifecycle_services.lock_actor_household(leaver)
 
-    ids = lifecycle_services._accounts_member_deletion_touches(leaver, own, remaining)
+    ids = lifecycle_services._accounts_member_deletion_touches(leaver, own.household_id, last_member=False)
 
     assert ids == touched
-    assert untouched.pk not in ids
+    assert not ids & untouched
+
+
+@pytest.mark.django_db
+def test_the_last_member_also_locks_accounts_defaulting_to_their_households_mappings():
+    """The teardown clears every default to the household's mappings, a former member's private account's too."""
+    from finance.csv_import.saved_mappings import save_csv_mapping
+
+    leaver = make_person("leaver")
+    former = make_person("former")
+    household = make_household(leaver, former)
+    former_account = make_account(former, name="Former Checking")
+    mapping = save_csv_mapping(former, name="Synthetic store", headers=["When", "Memo", "Amount", "Currency"],
+                               mapping=_synthetic_mapping())
+    Account.objects.filter(pk=former_account.pk).update(default_saved_csv_mapping=mapping)
+    leave_household(former)
+
+    assert former_account.pk not in lifecycle_services._accounts_member_deletion_touches(
+        leaver, household.pk, last_member=False
+    )
+    assert former_account.pk in lifecycle_services._accounts_member_deletion_touches(
+        leaver, household.pk, last_member=True
+    )
+    assert lifecycle_services._households_member_deletion_writes(leaver, None, set()) == set()
+    assert lifecycle_services._households_member_deletion_writes(former, None, set()) == {household.pk}
 
 
 def _account_lock_ids(sql):
