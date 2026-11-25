@@ -60,10 +60,12 @@ MAX_ELEMENTS_PER_ITEM = 50_000
 MAX_SHARED_STRINGS = 1_000_000
 # Real workbook parts nest a handful of levels; deeper nesting is refused as unreadable.
 MAX_XML_DEPTH = 32
-# Elements parsed across every worksheet part of one workbook. A full sheet within the row and
-# column caps (5,000 x 100 number cells, each a <c> and its <v>) is about 1,000,000; the text cap
-# allows at most 2,000,000 non-empty cells, about 4,000,000 elements as numbers. This leaves room
-# for styled blank cells on top while stopping well short of what 64 MB of parts could hold.
+# Elements parsed across every XML part of one workbook: the workbook part, its relationships,
+# shared strings, styles and worksheets. A full sheet within the row and column caps (5,000 x 100
+# number cells, each a <c> and its <v>) is about 1,000,000; the text cap allows at most 2,000,000
+# non-empty cells, about 4,000,000 elements as numbers, or about 6,000,000 with each cell's text in
+# its own shared string. This leaves room for styled blank cells while stopping well short of what
+# 64 MB of parts could hold.
 MAX_WORKBOOK_PARSE_ELEMENTS = 8_000_000
 
 TOO_LARGE = "That file is larger than 10 MB. Attach a smaller file."
@@ -355,13 +357,21 @@ def _is_utf8_xml(payload: bytes) -> bool:
     return declared is None or declared.group(1).strip().lower() in _UTF8_NAMES
 
 
-def _parse_xml(payload):
+def _parse_xml(payload, budget):
+    """The part as a tree, each element charged to the budget as it starts."""
     # _read_member refused any DTD, so no entity can be declared, expanded or fetched.
-    return ElementTree.fromstring(payload)  # noqa: S314 - DTDs are refused before parsing
+    root = None
+    for _event, element in ElementTree.iterparse(io.BytesIO(payload), events=("start",)):  # noqa: S314 - DTDs are refused
+        budget.spend()
+        if root is None:
+            root = element
+    if root is None:
+        raise ElementTree.ParseError("no root element")
+    return root
 
 
 class _ParseBudget:
-    """Elements a workbook's worksheet parts may still parse, shared by every part of one upload."""
+    """Elements one workbook's XML parts may still parse, shared by every part read for that upload."""
 
     def __init__(self, limit):
         self.left = limit
@@ -372,14 +382,14 @@ class _ParseBudget:
             raise AttachmentRejected(WORKBOOK_TOO_LARGE)
 
 
-def _stream(payload, tags, budget=None):
+def _stream(payload, tags, budget):
     """Yield (element, ancestor tags) for each element named in tags, as it ends.
 
     Everything else is dropped from the tree as soon as it ends, and each yielded element
     is dropped once the caller moves on, so memory holds one item at a time however large
     the part. Nesting deeper than MAX_XML_DEPTH and items with too many descendants are
-    refused, so the work per event stays constant. A budget, when given, is charged for
-    every element as it starts, so parsing stops inside the part once it runs out.
+    refused, so the work per event stays constant. The budget is charged for every element
+    as it starts, so parsing stops inside the part once it runs out.
     """
     stack = []
     open_items = 0
@@ -388,8 +398,7 @@ def _stream(payload, tags, budget=None):
     for event, element in ElementTree.iterparse(io.BytesIO(payload), events=("start", "end")):  # noqa: S314 - DTDs are refused
         name = _local(element.tag)
         if event == "start":
-            if budget is not None:
-                budget.spend()
+            budget.spend()
             if len(stack) >= MAX_XML_DEPTH:
                 raise AttachmentRejected(UNREADABLE)
             if open_items:
@@ -416,7 +425,9 @@ def _local(tag) -> str:
 
 
 def _read_workbook(archive, members):
-    workbook = _parse_xml(_read_member(archive, members, "xl/workbook.xml", MAX_TREE_PART_BYTES))
+    # One budget for every part parsed below, created before the first of them.
+    budget = _ParseBudget(MAX_WORKBOOK_PARSE_ELEMENTS)
+    workbook = _parse_xml(_read_member(archive, members, "xl/workbook.xml", MAX_TREE_PART_BYTES), budget)
     date1904 = False
     sheets = []
     for element in workbook.iter():
@@ -426,16 +437,15 @@ def _read_workbook(archive, members):
         elif tag == "sheet":
             rel = next((element.get(attr) for attr in _SHEET_ID_ATTRS if element.get(attr)), "")
             sheets.append((element.get("name") or "Sheet", rel))
-    targets = _worksheet_targets(archive, members)
+    targets = _worksheet_targets(archive, members, budget)
     sheets = [(name, targets[rel]) for name, rel in sheets if rel in targets]
     if not sheets:
         raise AttachmentRejected(EMPTY)
     if len(sheets) > MAX_SHEETS:
         raise AttachmentRejected(TOO_MANY_SHEETS)
-    strings = _shared_strings(archive, members)
-    date_styles = _date_styles(archive, members)
+    strings = _shared_strings(archive, members, budget)
+    date_styles = _date_styles(archive, members, budget)
     epoch = _EXCEL_1904_EPOCH if date1904 else _EXCEL_EPOCH
-    budget = _ParseBudget(MAX_WORKBOOK_PARSE_ELEMENTS)
     by_part = {}
     parsed = []
     total = 0
@@ -451,13 +461,13 @@ def _read_workbook(archive, members):
     return _sheet_result(parsed)
 
 
-def _worksheet_targets(archive, members):
+def _worksheet_targets(archive, members, budget):
     """Relationship id -> worksheet part. Chart sheets, macros and external links are never opened."""
     payload = _read_member(archive, members, "xl/_rels/workbook.xml.rels", MAX_TREE_PART_BYTES)
     if payload is None:
         return {}
     targets = {}
-    for element in _parse_xml(payload).iter():
+    for element in _parse_xml(payload, budget).iter():
         if _local(element.tag) != "Relationship":
             continue
         if element.get("TargetMode") == "External" or not str(element.get("Type", "")).endswith(_WORKSHEET_REL):
@@ -470,13 +480,13 @@ def _worksheet_targets(archive, members):
     return targets
 
 
-def _shared_strings(archive, members):
+def _shared_strings(archive, members, budget):
     payload = _read_member(archive, members, "xl/sharedStrings.xml")
     if payload is None:
         return []
     strings = []
     total = 0
-    for item, _ancestors in _stream(payload, {"si"}):
+    for item, _ancestors in _stream(payload, {"si"}, budget):
         parts = []
         for child in item:
             tag = _local(child.tag)
@@ -493,14 +503,14 @@ def _shared_strings(archive, members):
     return strings
 
 
-def _date_styles(archive, members):
+def _date_styles(archive, members, budget):
     """Indexes of cell styles whose number format shows a date or time."""
     payload = _read_member(archive, members, "xl/styles.xml")
     if payload is None:
         return frozenset()
     custom = {}
     styles = []
-    for item, ancestors in _stream(payload, {"numFmt", "xf"}):
+    for item, ancestors in _stream(payload, {"numFmt", "xf"}, budget):
         if _local(item.tag) == "numFmt" and "numFmts" in ancestors:
             custom[_int(item.get("numFmtId"))] = str(item.get("formatCode") or "")
         elif _local(item.tag) == "xf" and ancestors[-1:] == ["cellXfs"]:
@@ -534,7 +544,7 @@ def _column_index(letters: str) -> int:
     return index
 
 
-def _read_sheet(payload, name, strings, date_styles, epoch, budget=None):
+def _read_sheet(payload, name, strings, date_styles, epoch, budget):
     rows = _Rows(name)
     if payload is None:
         return rows

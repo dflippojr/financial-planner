@@ -644,20 +644,22 @@ def test_sheets_that_share_a_worksheet_part_read_it_once(monkeypatch):
 
 
 def test_shared_parts_count_once_against_the_workbook_parse_budget(monkeypatch):
-    # One part of five elements (worksheet, sheetData, row and two cells with their values is more);
-    # read once it fits a budget that five separate reads would overrun.
-    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 12, raising=False)
+    # The workbook part is 7 elements and its relationships 4. The worksheet part is 8 (worksheet,
+    # sheetData, row, an inline-string cell and a number cell): read once, the total of 19 fits a
+    # budget that five separate reads (51) would overrun.
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 19)
     parsed = parse_upload(upload("shared.xlsx", _shared_part_xlsx()))
     assert len(parsed.summary["sheets"]) == 5
 
 
 def test_a_workbook_past_the_parse_budget_is_refused_with_a_message(monkeypatch):
-    # Each sheet part is five elements: worksheet, sheetData, row, c and v.
+    # Each sheet part is five elements (worksheet, sheetData, row, c and v); the workbook part
+    # (4) and its relationships (3) bring the total to 17. A one-sheet workbook would be 10.
     two_sheets = make_xlsx([("A", rows_xml([[1]])), ("B", rows_xml([[2]]))])
-    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 10, raising=False)
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 17)
     assert [sheet["rows"] for sheet in parse_upload(upload("fits.xlsx", two_sheets)).summary["sheets"]] == [1, 1]
     # Each sheet fits alone; together they do not, so the budget spans the workbook.
-    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 9, raising=False)
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 16)
     _rejected("over.xlsx", two_sheets, "That workbook is too large to read. Remove sheets or rows you don't need, "
                                        "or save it as CSV, and attach it again.")
 
@@ -666,7 +668,7 @@ def test_the_parse_budget_stops_inside_a_part_and_counts_blank_rows(monkeypatch)
     blank_rows = "".join(f'<row r="{number}"/>' for number in range(1, 200)) + '<row r="200"><c r="A200"><v>1</v></c></row>'
     data = make_xlsx([("S", blank_rows)])
     assert _rows(parse_upload(upload("blank.xlsx", data))) == [[200, ["1"]]]
-    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 100, raising=False)
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 100)
     seen = []
     real_stream = parsing._stream
 
