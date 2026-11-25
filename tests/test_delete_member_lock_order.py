@@ -223,3 +223,88 @@ def test_a_member_deletion_waits_for_a_bulk_undo_that_locked_both_accounts_first
     assert errors == {"first": None, "competing": None}
     assert not Person.objects.filter(pk=leaver.pk).exists()
     assert not Transaction.objects.get(pk=marked.pk).untracked_transfer
+
+
+def _member_with_every_kind_of_counterpart():
+    """The leaver stays a member until the deletion; every account kind the deletion reaches is present."""
+    from finance.models import SavedCsvMapping
+
+    leaver = make_person("leaver")
+    member = make_person("member")
+    household = make_household(leaver, member)
+    shared = make_account(member, name="Member Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    lent = make_account(leaver, name="Leaver Lent", scope=Account.Scope.HOUSEHOLD, household=household,
+                        share_mode=Account.ShareMode.LENT)
+    private = make_account(leaver, name="Leaver Private")
+    paired = make_account(member, name="Member Paired")
+    refunds = make_account(member, name="Member Refunds")
+    loan = make_account(member, name="Member Loan", account_type=Account.Type.LOAN)
+    mapped = make_account(member, name="Member Mapped")
+    untouched = make_account(member, name="Member Untouched")
+    # Pair from the household to the member's private account: the exit revalidates it.
+    shared_out = make_transaction(member, shared, transaction_date=AUGUST, amount_minor=-3_000,
+                                  description="SYNTHETIC TRANSFER OUT")
+    paired_in = make_transaction(member, paired, transaction_date=AUGUST, amount_minor=3_000,
+                                 description="SYNTHETIC TRANSFER IN")
+    from finance.models import TransferPair
+
+    TransferPair.objects.create(leg_a=shared_out, leg_b=paired_in, status="confirmed", kind="transfer",
+                                confidence="high", reasons=[])
+    # Refund in the member's private account for a purchase in the leaver's lent account.
+    purchase = make_transaction(leaver, lent, transaction_date=AUGUST, amount_minor=-5_000,
+                                description="SYNTHETIC LENT PURCHASE")
+    refund = make_transaction(member, refunds, transaction_date=AUGUST, amount_minor=1_000,
+                              description="SYNTHETIC MEMBER REFUND")
+    link_refund(member, refund.pk, purchase.pk)
+    # Legacy data: a loan still secured by the leaver's private account.
+    Account.objects.filter(pk=loan.pk).update(secured_asset=private)
+    mapping = SavedCsvMapping.objects.create(
+        household=household, name="Synthetic mapping", headers=["When", "Memo", "Amount"], date_column="When",
+        description_column="Memo", date_format="iso", number_format="dot_none", amount_mode="signed",
+        amount_column="Amount", created_by=leaver,
+    )
+    Account.objects.filter(pk=mapped.pk).update(default_saved_csv_mapping=mapping)
+    touched = {shared.pk, lent.pk, private.pk, paired.pk, refunds.pk, loan.pk, mapped.pk}
+    return leaver, lent, touched, untouched
+
+
+@pytest.mark.django_db
+def test_the_first_lock_pass_covers_every_account_the_deletion_reaches():
+    leaver, _lent, touched, untouched = _member_with_every_kind_of_counterpart()
+    own, memberships = lifecycle_services.lock_actor_household(leaver)
+    remaining = [membership for membership in memberships if membership.pk != own.pk]
+
+    ids = lifecycle_services._accounts_member_deletion_touches(leaver, own, remaining)
+
+    assert ids == touched
+    assert untouched.pk not in ids
+
+
+def _account_lock_ids(sql):
+    import re
+
+    match = re.search(r'"finance_account"\."id" (?:IN \(([\d, ]+)\)|= (\d+))', sql)
+    assert match, f"Account lock without an id filter: {sql}"
+    return {int(pk) for pk in (match.group(1) or match.group(2)).split(",")}
+
+
+@pytest.mark.django_db
+def test_no_account_lock_after_the_first_pass_reaches_a_new_account():
+    """Every later `FOR UPDATE` on accounts, in the exit and in each delete_account, names only held accounts."""
+    _require_postgres()
+    from django.test.utils import CaptureQueriesContext
+
+    leaver, lent, touched, _untouched = _member_with_every_kind_of_counterpart()
+
+    with CaptureQueriesContext(connection) as queries:
+        delete_member_data(leaver, {lent.pk: lifecycle_services.LENT_DELETE})
+
+    account_locks = [
+        _account_lock_ids(query["sql"]) for query in queries.captured_queries
+        if query["sql"].lstrip().startswith("SELECT") and 'FROM "finance_account"' in query["sql"]
+        and "FOR UPDATE" in query["sql"]
+    ]
+    assert account_locks[0] == touched
+    assert len(account_locks) > 2, "the exit and delete_account lock accounts again"
+    assert all(ids <= touched for ids in account_locks[1:])
+    assert not Person.objects.filter(pk=leaver.pk).exists()
