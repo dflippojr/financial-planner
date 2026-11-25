@@ -392,3 +392,63 @@ def test_missing_config_values_explain_required_override(rig, tmp_path, missing)
     assert rig.checker.run() == 1
     assert not rig.calls
     assert ("--health-url" if missing == "health" else "--status-path") in rig.checker.failures[0]
+
+
+@pytest.fixture
+def python310_datetime(monkeypatch):
+    """Exercise the older fromisoformat contract on every CI interpreter."""
+    class Python310Datetime(datetime):
+        @classmethod
+        def fromisoformat(cls, value):
+            match = check.TIME_PATTERN.fullmatch(value)
+            fraction = match[2] if match else None
+            if value.endswith("Z") or (fraction is not None and len(fraction) not in (3, 6)):
+                raise ValueError("Python 3.10 cannot parse this ISO timestamp")
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr(check, "datetime", Python310Datetime)
+
+
+def nanosecond_inspect_times(rig):
+    for info in rig.state.values():
+        for mapping, key in ((info, "Created"), (info["State"], "StartedAt")):
+            whole = mapping[key].split(".")[0].removesuffix("Z")
+            mapping[key] = whole + ".123456789Z"
+    rig.log.write_text("\n".join(
+        f"{check.unix_nanoseconds(rig.state[service]['Created'])} {action} {service}-id"
+        for service in ("app", "backup", "background") for action in ("create", "start")
+    ), encoding="utf-8")
+
+
+def test_python310_explicit_since_cannot_pass_a_restarted_nanosecond_container(
+    rig, python310_datetime, capsys,
+):
+    nanosecond_inspect_times(rig)
+    rig.args.since = DEPLOY - timedelta(seconds=5)
+    rig.state["app"]["RestartCount"] = 2
+    rig.state["app"]["State"]["FinishedAt"] = docker_time(NOW)
+    rig.log.write_text("", encoding="utf-8")  # No evidence may prove one start.
+
+    assert rig.checker.run() == 1
+    output = capsys.readouterr().out
+    assert "app restarted 2 time(s) since the deploy" in output
+    assert "app stopped and started again since it was created" in output
+    assert "the event log does not reach the app deploy" in output
+
+
+@pytest.mark.parametrize("explicit_since", [False, True])
+def test_python310_clean_nanosecond_deploy_passes(rig, python310_datetime, explicit_since):
+    nanosecond_inspect_times(rig)
+    if explicit_since:
+        rig.args.since = DEPLOY - timedelta(seconds=5)
+    assert rig.checker.run() == 0
+
+
+@pytest.mark.parametrize("field", ["Created", "StartedAt"])
+@pytest.mark.parametrize("value", ["not-a-date", "2026-02-30T12:00:00.123456789Z"])
+def test_invalid_inspect_timestamp_fails_closed_with_explicit_since(rig, field, value):
+    rig.args.since = DEPLOY - timedelta(seconds=5)
+    target = rig.state["app"] if field == "Created" else rig.state["app"]["State"]
+    target[field] = value
+    assert rig.checker.run() == 1
+    assert any(f"cannot parse app {field} timestamp" in failure for failure in rig.checker.failures)
