@@ -42,6 +42,10 @@ REFUND_LINK_RULE = (
 REFUND_LINK_STANDS = "Another member's link for this refund still stands, so it can't be relinked here."
 SPLIT_PART_REQUIRED = "Choose a split part for each linked refund."
 SPLIT_PART_MISMATCH = "A refund linked to a split purchase must use a part of that purchase."
+# History for a saved drop that undoing a bulk mark does not restore (#797, owner decision on #809).
+SAVED_DROP_LABEL = "Left out for a transfer pair"
+DROP_SKIPPED_MEMBER = "Not restored after undo: the member it was left out for is no longer here"
+DROP_SKIPPED_PAIR = "Not restored after undo: the transfer pair no longer leaves its legs out"
 
 
 def _refund_viewers_see_original():
