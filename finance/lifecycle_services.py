@@ -37,8 +37,9 @@ LENT_CHOICES = (LENT_HANDOVER, LENT_DELETE)
 # memberships (in primary-key order), then accounts in primary-key order
 # (including counterpart accounts of transfer pairs and refund links), then
 # the rows being changed or deleted. delete_member_data takes every account it
-# will touch in its one first account pass; its later steps re-lock only
-# accounts it already holds (#810). Two transactions that take the same locks
+# will touch in its one first account pass, starting the transaction again if
+# that set grew before it was locked; its later steps re-lock only accounts it
+# already holds (#810). Two transactions that take the same locks
 # in a different order can each hold what the other awaits, and PostgreSQL then
 # aborts one of them with a deadlock error. Always call lock_actor_household()
 # first.
@@ -1010,10 +1011,10 @@ def _accounts_member_deletion_touches(person, own_membership, remaining):
     may make any of them the member's and delete it), the other accounts of
     pairs and refund links touching those, loans secured by any of them (their
     pairing is cleared), and accounts whose default CSV mapping the deletion
-    clears. Creating a pair or refund link to one of the member's accounts
-    locks that account, so once these are locked no new link reaches them;
-    the caller reads the set again after locking to catch a link committed
-    in between. Deleting a link only narrows the set.
+    clears. Creating a pair or refund link to one of these accounts locks it,
+    so once they are locked no new link reaches them; the caller reads the set
+    again after locking and starts over if a link committed in between grew
+    it. Deleting a link only narrows the set.
     """
     ids = set(Account.objects.filter(owner=person).values_list("pk", flat=True))
     mappings = Q(default_saved_csv_mapping__created_by=person)
@@ -1031,9 +1032,32 @@ def _accounts_member_deletion_touches(person, own_membership, remaining):
     return ids
 
 
-@transaction.atomic
+class _AccountSetGrew(Exception):
+    """A link committed between reading the deletion's accounts and locking them added one."""
+
+    def __init__(self, account_ids):
+        super().__init__("member deletion account set grew")
+        self.account_ids = account_ids
+
+
 def delete_member_data(principal, lent_choices=None):
-    """Remove this member's private data and login, keeping shared household rows."""
+    """Remove this member's private data and login, keeping shared household rows.
+
+    Each attempt is one transaction. If the accounts it must lock grew between
+    the read and the lock, it rolls back, releasing every lock, and starts
+    again with the larger set (#810). The set only grows across attempts and
+    is bounded by the accounts that exist, so this ends.
+    """
+    known_ids = set()
+    while True:
+        try:
+            return _delete_member_data_once(principal, lent_choices, known_ids)
+        except _AccountSetGrew as grew:
+            known_ids = grew.account_ids
+
+
+@transaction.atomic
+def _delete_member_data_once(principal, lent_choices, known_ids):
     person = _person_for(principal)
     user = person.user
     lent, submitted = _parsed_lent_choices(person, lent_choices)
@@ -1046,11 +1070,13 @@ def delete_member_data(principal, lent_choices=None):
             key=lambda membership: (membership.joined_at, membership.pk),
         )
     successor = remaining[0].person if remaining else None
-    locked_ids = _accounts_member_deletion_touches(person, own_membership, remaining)
+    locked_ids = known_ids | _accounts_member_deletion_touches(person, own_membership, remaining)
     _lock_accounts_in_pk_order(locked_ids)
-    # A link committed between the read and the lock still reaches a new
-    # account; take it now, before any deletion starts.
-    _lock_accounts_in_pk_order(_accounts_member_deletion_touches(person, own_membership, remaining) - locked_ids)
+    # A link committed between the read and the lock reaches an account not
+    # locked yet. Taking it now could be out of pk order, so start again.
+    grown = _accounts_member_deletion_touches(person, own_membership, remaining) - locked_ids
+    if grown:
+        raise _AccountSetGrew(locked_ids | grown)
     _handover_lent_accounts(lent, submitted, successor)
     if own_membership is not None:
         end_current_membership(person)
