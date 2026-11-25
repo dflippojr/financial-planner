@@ -12,6 +12,8 @@ from io import StringIO
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -83,6 +85,23 @@ def test_the_link_signs_the_member_in_once():
     assert again.get(path).status_code == 404
     assert again.post(path).status_code == 404
     assert "_auth_user_id" not in again.session
+
+
+@pytest.mark.django_db
+@_google_only()
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="SQLite takes no row locks")
+def test_redeeming_locks_only_the_grant_so_it_cannot_deadlock_with_a_new_link():
+    # Issuing locks the member and then deletes the grant. Redeeming must not
+    # lock the grant and then the member, or the two would wait on each other.
+    user, _person, _household = make_member()
+    path, _token = _issue(user.username)
+
+    with CaptureQueriesContext(connection) as queries:
+        Client().post(path)
+
+    locking = [query["sql"] for query in queries if "FOR UPDATE" in query["sql"] and "breakglassgrant" in query["sql"]]
+    assert locking
+    assert all('FOR UPDATE OF "finance_breakglassgrant"' in sql for sql in locking), locking
 
 
 @pytest.mark.django_db

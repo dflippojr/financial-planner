@@ -256,6 +256,8 @@ CONNECTOR_CLIENT_IP_CASES = {
     "untrusted-peer-with-both-headers": ("203.0.113.20", "198.51.100.7", "192.0.2.60", CONNECTOR, "203.0.113.20"),
     "no-trusted-proxy": ("203.0.113.20", "198.51.100.7", "192.0.2.60", "", "203.0.113.20"),
     "invalid-connector-header": (CONNECTOR, "not-an-ip", None, CONNECTOR, CONNECTOR),
+    "empty-connector-header-ignores-forwarded-for": (CONNECTOR, "", "192.0.2.60", CONNECTOR, CONNECTOR),
+    "blank-connector-header-ignores-forwarded-for": (CONNECTOR, "  ", "192.0.2.60", CONNECTOR, CONNECTOR),
     "invalid-connector-header-ignores-forwarded-for": (CONNECTOR, "198.51.100.7, 192.0.2.1", "192.0.2.60", CONNECTOR, CONNECTOR),
 }
 
