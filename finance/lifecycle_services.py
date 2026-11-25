@@ -255,6 +255,12 @@ def _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_id
     )
 
 
+def _refund_account_ids(transaction_ids):
+    from finance.refund_links import account_ids_in_refunds_touching_transactions
+
+    return account_ids_in_refunds_touching_transactions(transaction_ids)
+
+
 def _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=None):
     """Also lock the other accounts of the seed rows' refund links.
 
@@ -262,12 +268,10 @@ def _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, 
     join the ordered account locks rather than being reached after this
     account's rows are held.
     """
-    from finance.refund_links import account_ids_in_refunds_touching_transactions
-
     if seed_leg_ids is None:
         seed_leg_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
     extras = _pair_counterpart_account_ids(account_id, seed_leg_ids)
-    extras |= account_ids_in_refunds_touching_transactions(seed_leg_ids) - {account_id}
+    extras |= _refund_account_ids(seed_leg_ids) - {account_id}
     return _lock_visible_account_with_counterparts(person, account_id, extras)
 
 
@@ -1011,9 +1015,6 @@ def _accounts_member_deletion_touches(person, own_membership, remaining):
     the caller reads the set again after locking to catch a link committed
     in between. Deleting a link only narrows the set.
     """
-    from finance.refund_links import account_ids_in_refunds_touching_transactions
-    from finance.transfer_pairing import account_ids_in_pairs_touching_transactions
-
     ids = set(Account.objects.filter(owner=person).values_list("pk", flat=True))
     mappings = Q(default_saved_csv_mapping__created_by=person)
     if own_membership is not None:
@@ -1024,8 +1025,8 @@ def _accounts_member_deletion_touches(person, own_membership, remaining):
         if not remaining:
             mappings |= Q(default_saved_csv_mapping__household_id=household_id)
     seed_ids = list(Transaction.objects.filter(account_id__in=ids).values_list("pk", flat=True))
-    ids |= account_ids_in_pairs_touching_transactions(seed_ids)
-    ids |= account_ids_in_refunds_touching_transactions(seed_ids)
+    ids |= _pair_counterpart_account_ids(None, seed_ids)
+    ids |= _refund_account_ids(seed_ids)
     ids.update(Account.objects.filter(Q(secured_asset_id__in=ids) | mappings).values_list("pk", flat=True))
     return ids
 
