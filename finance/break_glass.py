@@ -58,12 +58,16 @@ def break_glass_token_is_usable(token):
     return _usable_grants(token).exists()
 
 
+def locked_grant_for_redeeming(token):
+    # Lock the grant only. Issuing locks the member and then deletes the grant,
+    # so locking the joined member here as well could deadlock with it.
+    return _usable_grants(token).select_for_update(of=("self",)).select_related("user")
+
+
 @transaction.atomic
 def redeem_break_glass_token(token):
     """Use the token up and return its member, or None when it is not usable."""
-    # Lock the grant only. Issuing locks the member and then deletes the grant,
-    # so locking the joined member here as well could deadlock with it.
-    grant = _usable_grants(token).select_for_update(of=("self",)).select_related("user").first()
+    grant = locked_grant_for_redeeming(token).first()
     if grant is None or not hasattr(grant.user, "person"):
         return None
     grant.used_at = timezone.now()

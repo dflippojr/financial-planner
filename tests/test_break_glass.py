@@ -12,14 +12,13 @@ from io import StringIO
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import connection
-from django.test.utils import CaptureQueriesContext
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from allauth.socialaccount.models import SocialAccount
 
+from finance.break_glass import locked_grant_for_redeeming
 from finance.models import AuditEvent, BreakGlassGrant, LoginThrottle, MemberSecurityEvent
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from tests.test_auth_flows import make_member
@@ -89,19 +88,18 @@ def test_the_link_signs_the_member_in_once():
 
 @pytest.mark.django_db
 @_google_only()
-@pytest.mark.skipif(connection.vendor != "postgresql", reason="SQLite takes no row locks")
 def test_redeeming_locks_only_the_grant_so_it_cannot_deadlock_with_a_new_link():
     # Issuing locks the member and then deletes the grant. Redeeming must not
     # lock the grant and then the member, or the two would wait on each other.
+    # SQLite takes no row locks, so this reads the lock the query asks for.
     user, _person, _household = make_member()
-    path, _token = _issue(user.username)
+    _path, token = _issue(user.username)
 
-    with CaptureQueriesContext(connection) as queries:
-        Client().post(path)
+    query = locked_grant_for_redeeming(token).query
 
-    locking = [query["sql"] for query in queries if "FOR UPDATE" in query["sql"] and "breakglassgrant" in query["sql"]]
-    assert locking
-    assert all('FOR UPDATE OF "finance_breakglassgrant"' in sql for sql in locking), locking
+    assert query.select_for_update
+    assert query.select_for_update_of == ("self",)
+    assert locked_grant_for_redeeming(token).get().user == user
 
 
 @pytest.mark.django_db
