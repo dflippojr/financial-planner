@@ -654,6 +654,9 @@ def break_glass(request, token):
         record_login_failure(key)
         raise Http404()
     clear_login_failures(key)
+    # Redeeming ended every session of the member, this browser's included,
+    # so start from an empty session with a new key.
+    request.session.flush()
     _complete_member_session(request, user)
     record_security_event(user, EVENT_TYPES.BREAK_GLASS_SIGN_IN, request=request)
     return redirect("account-settings")
