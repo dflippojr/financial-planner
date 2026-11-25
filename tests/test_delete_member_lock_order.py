@@ -306,3 +306,308 @@ def test_a_link_committed_between_the_read_and_the_lock_restarts_the_first_pass(
     assert not Person.objects.filter(pk=leaver.pk).exists()
     assert not Transaction.objects.get(pk=marked.pk).untracked_transfer
     assert not RefundLink.objects.exists()
+
+
+# Review r2 F1 on #811: CSV mappings. update_csv_mapping locks the mapping and
+# then writes accounts; an import locks the account and then the mapping. A
+# former member's deletion writes the mapping it created and locks accounts
+# in that household, so it locks the household's memberships first, as both do.
+
+SYNTHETIC_CSV = b"When,Memo,Amount,Currency\n09/27/2026,SYNTHETIC GROCER,-12.34,USD\n"
+
+
+def _synthetic_mapping():
+    from finance.csv_import.parser import Mapping
+
+    return Mapping(date_column="When", description_column="Memo", date_format="mdy_slash_4",
+                   number_format="dot_comma", amount_mode="signed", amount_column="Amount",
+                   currency_column="Currency")
+
+
+def _former_member_with_a_mapping(*, refund_counterpart):
+    """The leaver saved a household mapping that is the default for the member's shared account C, then left.
+
+    With `refund_counterpart`, the leaver's private account P (C < P) also has a
+    refund linked to a purchase in C, so deleting P writes in C.
+    """
+    from finance.csv_import.saved_mappings import save_csv_mapping
+
+    leaver = make_person("leaver")
+    member = make_person("member")
+    household = make_household(leaver, member)
+    shared = make_account(member, name="Member Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(leaver, name="Leaver Checking")
+    assert shared.pk < private.pk
+    if refund_counterpart:
+        purchase = make_transaction(member, shared, transaction_date=AUGUST, amount_minor=-4_000,
+                                    description="SYNTHETIC PURCHASE")
+        refund = make_transaction(leaver, private, transaction_date=AUGUST, amount_minor=1_000,
+                                  description="SYNTHETIC REFUND")
+        link_refund(leaver, refund.pk, purchase.pk)
+    mapping = save_csv_mapping(leaver, name="Synthetic store", headers=["When", "Memo", "Amount", "Currency"],
+                               mapping=_synthetic_mapping(), account=shared, set_as_account_default=True)
+    leave_household(leaver)
+    return leaver, member, shared, mapping
+
+
+def _update_mapping(member, mapping):
+    from finance.csv_import.saved_mappings import update_csv_mapping
+
+    return lambda: update_csv_mapping(member, mapping.pk, name="Synthetic renamed", default_account_ids=[])
+
+
+def _import_into(member, account, mapping):
+    from finance.csv_import.parser import read_csv
+    from finance.csv_import.services import commit_csv_import
+    from finance.models import ImportBatch
+
+    return lambda: commit_csv_import(
+        member, account.pk, content=SYNTHETIC_CSV, document=read_csv(SYNTHETIC_CSV), mapping=_synthetic_mapping(),
+        source=ImportBatch.Source.HUNTINGTON, date_range_start=date(2026, 9, 1), date_range_end=date(2026, 9, 30),
+        saved_csv_mapping=mapping,
+    )
+
+
+def _assert_mapping_updated(leaver, member, shared, mapping):
+    from finance.models import SavedCsvMapping
+
+    assert not Person.objects.filter(pk=leaver.pk).exists()
+    saved = SavedCsvMapping.objects.get(pk=mapping.pk)
+    assert (saved.name, saved.created_by_id) == ("Synthetic renamed", member.pk)
+    assert Account.objects.get(pk=shared.pk).default_saved_csv_mapping_id is None
+
+
+def _assert_imported(leaver, member, shared, mapping):
+    from finance.models import SavedCsvMapping
+
+    assert not Person.objects.filter(pk=leaver.pk).exists()
+    assert SavedCsvMapping.objects.get(pk=mapping.pk).created_by_id == member.pk
+    assert Transaction.objects.filter(account=shared, description="SYNTHETIC GROCER").count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_csv_mapping_waits_for_a_member_deletion_that_hands_its_mapping_over():
+    _require_postgres()
+    leaver, member, shared, mapping = _former_member_with_a_mapping(refund_counterpart=False)
+
+    errors = _race(
+        lambda: delete_member_data(leaver), _update_mapping(member, mapping),
+        lifecycle_services, "_handover_lent_accounts",
+    )
+
+    assert errors == {"first": None, "competing": None}
+    _assert_mapping_updated(leaver, member, shared, mapping)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_member_deletion_waits_for_update_csv_mapping_that_locked_the_mapping_first():
+    from finance.csv_import import saved_mappings
+
+    _require_postgres()
+    leaver, member, shared, mapping = _former_member_with_a_mapping(refund_counterpart=False)
+
+    errors = _race(
+        _update_mapping(member, mapping), lambda: delete_member_data(leaver),
+        saved_mappings, "replace_mapping_account_defaults",
+    )
+
+    assert errors == {"first": None, "competing": None}
+    _assert_mapping_updated(leaver, member, shared, mapping)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_import_waits_for_a_member_deletion_that_wrote_its_mapping():
+    """The deletion has handed the mapping over and has yet to delete P, which writes in C."""
+    _require_postgres()
+    leaver, member, shared, mapping = _former_member_with_a_mapping(refund_counterpart=True)
+
+    errors = _race(
+        lambda: delete_member_data(leaver), _import_into(member, shared, mapping),
+        lifecycle_services, "_release_household_owned_rows",
+    )
+
+    assert errors == {"first": None, "competing": None}
+    _assert_imported(leaver, member, shared, mapping)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_member_deletion_waits_for_an_import_that_locked_the_account_and_mapping_first():
+    from finance.csv_import import services
+
+    _require_postgres()
+    leaver, member, shared, mapping = _former_member_with_a_mapping(refund_counterpart=True)
+
+    errors = _race(
+        _import_into(member, shared, mapping), lambda: delete_member_data(leaver),
+        services, "_locked_saved_mapping",
+    )
+
+    assert errors == {"first": None, "competing": None}
+    _assert_imported(leaver, member, shared, mapping)
+
+
+# Review r2 F2 on #811 (liaison decision, option A): every account lock while
+# delete_member_data runs is checked against the accounts its first pass
+# holds; any other account restarts the deletion with a fresh first pass.
+
+
+def _record_attempts():
+    """Patch the account lock and each attempt; returns the account sets locked, one list per attempt."""
+    attempts = []
+    lock = lifecycle_services._lock_accounts_in_pk_order
+    once = lifecycle_services._delete_member_data_once
+
+    def record_lock(account_ids):
+        ids = set(account_ids)
+        attempts[-1].append(ids)
+        return lock(ids)
+
+    def record_attempt(*args, **kwargs):
+        attempts.append([])
+        return once(*args, **kwargs)
+
+    patches = (
+        patch.object(lifecycle_services, "_lock_accounts_in_pk_order", record_lock),
+        patch.object(lifecycle_services, "_delete_member_data_once", record_attempt),
+    )
+    return attempts, patches
+
+
+def _in_another_transaction(action):
+    """Run `action` in its own thread and connection, committed before this returns."""
+    errors = []
+
+    def run():
+        try:
+            action()
+        except Exception as exc:  # noqa: BLE001 - reported to the test thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=JOIN_SECONDS)
+    assert not worker.is_alive(), "the concurrent change did not finish"
+    assert errors == []
+
+
+def _run_deletion_with(leaver, pause_name, concurrent_change):
+    """Delete the leaver's data; the first time `pause_name` returns, commit `concurrent_change` elsewhere."""
+    attempts, (lock_patch, attempt_patch) = _record_attempts()
+    done = []
+    with lock_patch, attempt_patch:
+        # Read after the recording patches, so pausing on the lock keeps recording it.
+        original = getattr(lifecycle_services, pause_name)
+
+        def change_once(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if not done:
+                done.append(True)
+                _in_another_transaction(concurrent_change)
+            return result
+
+        with patch.object(lifecycle_services, pause_name, change_once):
+            delete_member_data(leaver)
+    return attempts
+
+
+def _assert_restarted_with_one_first_pass(attempts, expected_ids):
+    assert len(attempts) >= 2, f"the deletion did not start again: {attempts}"
+    first, *later = attempts[-1]
+    assert expected_ids <= first
+    assert all(ids <= first for ids in later), attempts[-1]
+
+
+def _left_member_with_private_account():
+    leaver = make_person("leaver")
+    member = make_person("member")
+    household = make_household(leaver, member)
+    shared = make_account(member, name="Member Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    member_private = make_account(member, name="Member Private")
+    private = make_account(leaver, name="Leaver Checking")
+    leave_household(leaver)
+    return leaver, member, household, shared, member_private, private
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grid_an_account_created_after_the_reread_restarts_the_deletion():
+    _require_postgres()
+    leaver, _member, _household, _shared, _member_private, private = _left_member_with_private_account()
+    created = []
+
+    def create_account():
+        created.append(make_account(leaver, name="Leaver Late Savings", account_type=Account.Type.SAVINGS))
+
+    attempts = _run_deletion_with(leaver, "_handover_lent_accounts", create_account)
+
+    _assert_restarted_with_one_first_pass(attempts, {private.pk, created[0].pk})
+    assert not Person.objects.filter(pk=leaver.pk).exists()
+    assert not Account.objects.filter(pk=created[0].pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grid_a_pair_committed_between_the_read_and_the_lock_restarts_the_deletion():
+    """The insert stands in for a pair refresh that committed just before the deletion's lock."""
+    from finance.models import TransferPair
+
+    _require_postgres()
+    leaver, member, _household, _shared, member_private, private = _left_member_with_private_account()
+    assert member_private.pk < private.pk
+    out_leg = make_transaction(leaver, private, transaction_date=AUGUST, amount_minor=-3_000,
+                               description="SYNTHETIC TRANSFER OUT")
+    in_leg = make_transaction(member, member_private, transaction_date=AUGUST, amount_minor=3_000,
+                              description="SYNTHETIC TRANSFER IN")
+
+    def pair():
+        TransferPair.objects.create(leg_a=out_leg, leg_b=in_leg, status="confirmed", kind="transfer",
+                                    confidence="high", reasons=[])
+
+    attempts = _run_deletion_with(leaver, "_lock_accounts_in_pk_order", pair)
+
+    _assert_restarted_with_one_first_pass(attempts, {member_private.pk, private.pk})
+    assert attempts[0][0] == {private.pk}
+    assert not TransferPair.objects.exists()
+    assert Transaction.objects.filter(pk=in_leg.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grid_a_household_account_added_after_the_reread_restarts_the_deletion():
+    _require_postgres()
+    leaver = make_person("leaver")
+    member = make_person("member")
+    household = make_household(leaver, member)
+    shared = make_account(member, name="Member Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(leaver, name="Leaver Checking")
+    added = []
+
+    def add_household_account():
+        added.append(lifecycle_services.create_account(
+            member, name="Member New Shared", account_type=Account.Type.SAVINGS, household=household,
+            share_mode=Account.ShareMode.CO_OWNED,
+        ))
+
+    attempts = _run_deletion_with(leaver, "_handover_lent_accounts", add_household_account)
+
+    _assert_restarted_with_one_first_pass(attempts, {shared.pk, private.pk, added[0].pk})
+    assert not Person.objects.filter(pk=leaver.pk).exists()
+    assert Account.objects.get(pk=added[0].pk).owner_id == member.pk
+
+
+@pytest.mark.django_db
+def test_a_deletion_whose_accounts_never_settle_fails_loudly_and_changes_nothing():
+    leaver, _member, _household, _shared, _member_private, private = _left_member_with_private_account()
+    grows = iter(range(10_000_000, 10_000_100))
+    touches = lifecycle_services._accounts_member_deletion_touches
+
+    def always_more(*args, **kwargs):
+        return touches(*args, **kwargs) | {next(grows)}
+
+    with (
+        patch.object(lifecycle_services, "_accounts_member_deletion_touches", always_more),
+        pytest.raises(lifecycle_services.MemberDeletionUnsettled),
+    ):
+        delete_member_data(leaver)
+
+    assert Person.objects.filter(pk=leaver.pk).exists()
+    assert Account.objects.filter(pk=private.pk).exists()
