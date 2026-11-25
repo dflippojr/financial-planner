@@ -5,13 +5,10 @@ concurrent `delete_member_data` either lands first (undo skips the drop
 visibly) or waits for the undo. Synthetic data only.
 """
 
-import threading
 from datetime import date
-from time import monotonic
-from unittest.mock import patch
 
 import pytest
-from django.db import connection, connections
+from django.db import connection
 from django.db.models import Q
 
 from finance import bulk_edit_services, lifecycle_services
@@ -28,7 +25,7 @@ from finance.models import (
 )
 from finance.refund_links import DROP_SKIPPED_MEMBER, DROP_SKIPPED_PAIR, SAVED_DROP_LABEL, link_refund
 from finance.transfer_pairing import confirm_transfer_pair, refresh_transfer_pairs
-from tests.lock_races import JOIN_SECONDS, WAIT_SECONDS, wait_until_blocked_by
+from tests.lock_races import race_two_transactions
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 
 AUGUST = date(2026, 8, 12)
@@ -86,62 +83,10 @@ def test_undo_after_the_member_left_skips_their_drop_for_them_alone():
 
 
 def _race(first_action, competing_action, pause_module, pause_name):
-    """Run `first_action` until it returns from `pause_name`, then `competing_action`.
-
-    Waits until PostgreSQL reports the competitor blocked on the first
-    transaction's locks, releases the first, and requires both to finish
-    without an error. Each worker has its own bounded session.
-    """
-    first_holds = threading.Event()
-    release_first = threading.Event()
-    competing_done = threading.Event()
-    errors = []
-    pids = {}
-    original = getattr(pause_module, pause_name)
-
-    def pause_after(*args, **kwargs):
-        result = original(*args, **kwargs)
-        if threading.current_thread() is first:
-            first_holds.set()
-            if not release_first.wait(timeout=JOIN_SECONDS):
-                raise TimeoutError("First worker was never released")
-        return result
-
-    def run(action, role, done):
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SET lock_timeout = '15s'")
-                cursor.execute("SET statement_timeout = '20s'")
-                cursor.execute("SELECT pg_backend_pid()")
-                pids[role] = cursor.fetchone()[0]
-            action()
-        except Exception as exc:  # noqa: BLE001 - reported to the main thread
-            errors.append(exc)
-        finally:
-            try:
-                connections.close_all()
-            finally:
-                done.set()
-
-    first_done = threading.Event()
-    first = threading.Thread(target=run, args=(first_action, "first", first_done), daemon=True)
-    competing = threading.Thread(target=run, args=(competing_action, "competing", competing_done), daemon=True)
-    with patch.object(pause_module, pause_name, pause_after):
-        try:
-            first.start()
-            assert first_holds.wait(timeout=WAIT_SECONDS), f"First worker did not reach its pause: {errors}"
-            competing.start()
-            deadline = monotonic() + WAIT_SECONDS
-            while "competing" not in pids:
-                assert monotonic() < deadline and not competing_done.is_set(), f"Competitor did not connect: {errors}"
-                competing_done.wait(0.02)
-            wait_until_blocked_by(pids["competing"], pids["first"], competing_done, errors)
-        finally:
-            release_first.set()
-            first.join(timeout=JOIN_SECONDS)
-            competing.join(timeout=JOIN_SECONDS)
-    assert not first.is_alive() and not competing.is_alive(), "A race worker did not finish"
-    assert errors == []
+    """Run `first_action` until it returns from `pause_name`, then `competing_action`; both must succeed."""
+    assert race_two_transactions(first_action, competing_action, pause_module, pause_name) == {
+        "first": None, "competing": None,
+    }
 
 
 def _require_postgres():

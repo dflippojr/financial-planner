@@ -14,7 +14,6 @@ Synthetic data only.
 
 import threading
 from datetime import date
-from time import monotonic
 from unittest.mock import patch
 
 import pytest
@@ -25,7 +24,7 @@ from finance.bulk_edit_services import ACTION_MARK_UNTRACKED, apply_bulk_edit, u
 from finance.lifecycle_services import delete_member_data, leave_household
 from finance.models import Account, Person, RefundLink, Transaction
 from finance.refund_links import link_refund
-from tests.lock_races import JOIN_SECONDS, WAIT_SECONDS, wait_until_blocked_by
+from tests.lock_races import JOIN_SECONDS, race_two_transactions as _race
 from tests.test_categorization import make_account, make_household, make_person, make_transaction
 
 AUGUST = date(2026, 8, 12)
@@ -34,67 +33,6 @@ AUGUST = date(2026, 8, 12)
 def _require_postgres():
     if connection.vendor != "postgresql":
         pytest.skip("deadlocks between two transactions can only be exercised on PostgreSQL")
-
-
-def _race(first_action, competing_action, pause_module, pause_name):
-    """Run `first_action` until its first return from `pause_name`, then `competing_action`.
-
-    Waits until PostgreSQL reports the competitor blocked on the first
-    transaction, releases the first, and returns each worker's error (or
-    None). A deadlock aborts one worker with an error, so callers require
-    both to be None.
-    """
-    first_holds = threading.Event()
-    release_first = threading.Event()
-    competing_done = threading.Event()
-    errors = {}
-    pids = {}
-    original = getattr(pause_module, pause_name)
-
-    def pause_after(*args, **kwargs):
-        result = original(*args, **kwargs)
-        if threading.current_thread() is first and not first_holds.is_set():
-            first_holds.set()
-            if not release_first.wait(timeout=JOIN_SECONDS):
-                raise TimeoutError("First worker was never released")
-        return result
-
-    def run(action, role, done):
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SET lock_timeout = '15s'")
-                cursor.execute("SET statement_timeout = '20s'")
-                cursor.execute("SELECT pg_backend_pid()")
-                pids[role] = cursor.fetchone()[0]
-            action()
-            errors[role] = None
-        except Exception as exc:  # noqa: BLE001 - reported to the main thread
-            errors[role] = exc
-        finally:
-            try:
-                connections.close_all()
-            finally:
-                done.set()
-
-    first_done = threading.Event()
-    first = threading.Thread(target=run, args=(first_action, "first", first_done), daemon=True)
-    competing = threading.Thread(target=run, args=(competing_action, "competing", competing_done), daemon=True)
-    with patch.object(pause_module, pause_name, pause_after):
-        try:
-            first.start()
-            assert first_holds.wait(timeout=WAIT_SECONDS), f"First worker did not reach its pause: {errors}"
-            competing.start()
-            deadline = monotonic() + WAIT_SECONDS
-            while "competing" not in pids:
-                assert monotonic() < deadline and not competing_done.is_set(), f"Competitor did not connect: {errors}"
-                competing_done.wait(0.02)
-            wait_until_blocked_by(pids["competing"], pids["first"], competing_done, list(errors.values()))
-        finally:
-            release_first.set()
-            first.join(timeout=JOIN_SECONDS)
-            competing.join(timeout=JOIN_SECONDS)
-    assert not first.is_alive() and not competing.is_alive(), "A race worker did not finish"
-    return errors
 
 
 def _left_member_with_two_linked_accounts():
