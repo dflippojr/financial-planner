@@ -11,6 +11,9 @@ from finance import chat_attachment_parsing as parsing
 from finance import chat_attachment_pdf
 from finance.chat_attachment_parsing import AttachmentRejected, parse_upload
 from tests.chat_attachment_fixtures import (
+    PKG_REL_NS,
+    REL_NS,
+    WORKSHEET_TYPE,
     BUDGET_CSV,
     MAIN_NS,
     STRICT_MAIN_NS,
@@ -599,3 +602,105 @@ def test_xlsx_with_a_lone_surrogate_reference_is_unreadable_not_stored(cell_xml)
 def test_a_file_name_with_a_lone_surrogate_is_made_storable():
     parsed = parse_upload(upload(f"bud{LONE_SURROGATE}get.csv", BUDGET_CSV.encode()))
     assert ascii(parsed.name) == ascii("bud?get.csv")
+
+
+# --- Workbook parse work (#801) -----------------------------------------------
+
+
+def _shared_part_xlsx():
+    """Five sheet entries, all resolving to one worksheet part through different spellings."""
+    source = make_xlsx([("Budget", rows_xml([["Groceries", 400]]))])
+    sheets = [("First", "rId1"), ("Absolute", "rId2"), ("Dotted", "rId3"), ("Again", "rId1"), ("Twice", "rId3")]
+    targets = [("rId1", "worksheets/sheet1.xml"), ("rId2", "/xl/worksheets/sheet1.xml"),
+               ("rId3", "worksheets/../worksheets/./sheet1.xml")]
+    sheet_tags = "".join(f'<sheet name="{name}" sheetId="{index}" r:id="{rel}"/>'
+                         for index, (name, rel) in enumerate(sheets, start=1))
+    rels = "".join(f'<Relationship Id="{rel}" Type="{WORKSHEET_TYPE}" Target="{target}"/>' for rel, target in targets)
+    replaced = {
+        "xl/workbook.xml": f'<workbook xmlns="{MAIN_NS}" xmlns:r="{REL_NS}"><sheets>{sheet_tags}</sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": f'<Relationships xmlns="{PKG_REL_NS}">{rels}</Relationships>',
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(source)) as original, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in original.infolist():
+            target.writestr(info.filename, replaced.get(info.filename) or original.read(info))
+    return buffer.getvalue()
+
+
+def test_sheets_that_share_a_worksheet_part_read_it_once(monkeypatch):
+    reads = []
+    real_read_member = parsing._read_member
+
+    def counting(archive, members, path, limit=None):
+        reads.append(path)
+        return real_read_member(archive, members, path, limit)
+
+    monkeypatch.setattr(parsing, "_read_member", counting)
+    parsed = parse_upload(upload("shared.xlsx", _shared_part_xlsx()))
+    assert reads.count("xl/worksheets/sheet1.xml") == 1
+    assert [sheet["name"] for sheet in parsed.summary["sheets"]] == ["First", "Absolute", "Dotted", "Again", "Twice"]
+    for index in range(5):
+        assert _rows(parsed, index) == [[1, ["Groceries", "400"]]]
+
+
+def test_shared_parts_count_once_against_the_workbook_parse_budget(monkeypatch):
+    # The workbook part is 7 elements and its relationships 4. The worksheet part is 8 (worksheet,
+    # sheetData, row, an inline-string cell and a number cell): read once, the total of 19 fits a
+    # budget that five separate reads (51) would overrun.
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 19)
+    parsed = parse_upload(upload("shared.xlsx", _shared_part_xlsx()))
+    assert len(parsed.summary["sheets"]) == 5
+
+
+def test_a_workbook_past_the_parse_budget_is_refused_with_a_message(monkeypatch):
+    # Each sheet part is five elements (worksheet, sheetData, row, c and v); the workbook part
+    # (4) and its relationships (3) bring the total to 17. A one-sheet workbook would be 10.
+    two_sheets = make_xlsx([("A", rows_xml([[1]])), ("B", rows_xml([[2]]))])
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 17)
+    assert [sheet["rows"] for sheet in parse_upload(upload("fits.xlsx", two_sheets)).summary["sheets"]] == [1, 1]
+    # Each sheet fits alone; together they do not, so the budget spans the workbook.
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 16)
+    _rejected("over.xlsx", two_sheets, "That workbook is too large to read. Remove sheets or rows you don't need, "
+                                       "or save it as CSV, and attach it again.")
+
+
+def test_the_parse_budget_stops_inside_a_part_and_counts_blank_rows(monkeypatch):
+    blank_rows = "".join(f'<row r="{number}"/>' for number in range(1, 200)) + '<row r="200"><c r="A200"><v>1</v></c></row>'
+    data = make_xlsx([("S", blank_rows)])
+    assert _rows(parse_upload(upload("blank.xlsx", data))) == [[200, ["1"]]]
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 100)
+    seen = []
+    real_stream = parsing._stream
+
+    def recording(payload, tags, *args, **kwargs):
+        for item in real_stream(payload, tags, *args, **kwargs):
+            seen.append(item[0].get("r"))
+            yield item
+
+    monkeypatch.setattr(parsing, "_stream", recording)
+    with pytest.raises(AttachmentRejected) as caught:
+        parse_upload(upload("blank.xlsx", data))
+    assert str(caught.value).startswith("That workbook is too large to read.")
+    assert len(seen) < 100
+
+
+def test_every_parsed_workbook_part_is_charged_to_the_parse_budget(monkeypatch):
+    # The worksheet alone is five elements; the shared strings and styles are what push it over.
+    sheet = rows_xml([[1]])
+    plain = make_xlsx([("S", sheet)])
+    strings = make_xlsx([("S", sheet)], shared_strings="<si><t/></si>" * 20)
+    styles = make_xlsx([("S", sheet)], styles="<cellXfs>" + '<xf numFmtId="0"/>' * 20 + "</cellXfs>")
+    ignored = make_xlsx([("S", sheet)], styles="<fonts>" + "<font/>" * 20 + "</fonts>")
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 20)
+    assert _rows(parse_upload(upload("plain.xlsx", plain))) == [[1, ["1"]]]
+    for name, data in (("strings.xlsx", strings), ("styles.xlsx", styles), ("ignored.xlsx", ignored)):
+        _rejected(name, data, parsing.WORKBOOK_TOO_LARGE)
+    # The workbook part and its relationships count too, before any sheet is read.
+    many_rels = "".join(f'<Relationship Id="x{index}" Type="other" Target="other.xml"/>' for index in range(20))
+    rels = make_xlsx([("S", sheet)], extra_rels=many_rels)
+    _rejected("rels.xlsx", rels, parsing.WORKBOOK_TOO_LARGE)
+    sheets = []
+    real_read_sheet = parsing._read_sheet
+    monkeypatch.setattr(parsing, "_read_sheet", lambda *args: sheets.append(args) or real_read_sheet(*args))
+    _rejected("rels.xlsx", rels, parsing.WORKBOOK_TOO_LARGE)
+    assert sheets == []
