@@ -7,16 +7,18 @@ link's token is stored, the link expires after BREAK_GLASS_TTL, works once,
 and a newer link for the same member replaces the earlier one.
 """
 
+import hashlib
+import hmac
 import secrets
 from datetime import timedelta
 
-from allauth.socialaccount.models import SocialAccount
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .auth_services import _digest, throttle_key
-from .google_auth import _audit_sign_in_change, lock_member_for_sign_in_change
-from .models import AuditEvent, BreakGlassGrant
+from .auth_services import throttle_key
+from .google_auth import lock_member_for_sign_in_change, unlink_google_for_break_glass
+from .models import BreakGlassGrant
 from .security_services import EVENT_TYPES, record_security_event
 
 BREAK_GLASS_TTL = timedelta(minutes=15)
@@ -28,7 +30,7 @@ def break_glass_throttle_key(remote_address):
 
 
 def _token_digest(token):
-    return _digest(f"break-glass:{token or ''}")
+    return hmac.new(settings.SECRET_KEY.encode(), f"break-glass:{token or ''}".encode(), hashlib.sha256).hexdigest()
 
 
 @transaction.atomic
@@ -40,9 +42,8 @@ def issue_break_glass_token(user, *, unlink_google=False):
     BreakGlassGrant.objects.create(
         user=locked, token_digest=_token_digest(token), expires_at=timezone.now() + BREAK_GLASS_TTL
     )
-    if unlink_google and SocialAccount.objects.filter(user=locked, provider="google").exists():
-        SocialAccount.objects.filter(user=locked, provider="google").delete()
-        _audit_sign_in_change(locked, AuditEvent.Action.GOOGLE_DISCONNECTED)
+    if unlink_google:
+        unlink_google_for_break_glass(locked)
     record_security_event(locked, EVENT_TYPES.BREAK_GLASS_ISSUED)
     return token
 

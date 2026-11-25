@@ -639,7 +639,7 @@ def break_glass(request, token):
     and is refused: the link works on the tailnet only. Every refusal is the
     same 404.
     """
-    if not google_only_sign_in() or request.META.get("HTTP_CF_CONNECTING_IP"):
+    if not google_only_sign_in() or "HTTP_CF_CONNECTING_IP" in request.META:
         raise Http404()
     key = break_glass_throttle_key(client_ip(request))
     if login_is_blocked(key):

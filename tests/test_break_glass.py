@@ -186,6 +186,7 @@ def test_the_link_is_refused_for_a_request_that_came_through_cloudflare():
 
     assert client.get(path, HTTP_CF_CONNECTING_IP="203.0.113.20").status_code == 404
     assert client.post(path, HTTP_CF_CONNECTING_IP="203.0.113.20").status_code == 404
+    assert client.post(path, HTTP_CF_CONNECTING_IP="").status_code == 404
     assert "_auth_user_id" not in client.session
     assert BreakGlassGrant.objects.get().used_at is None
 

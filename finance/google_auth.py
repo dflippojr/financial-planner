@@ -211,6 +211,19 @@ def disconnect_google_account(user):
     return True
 
 
+def unlink_google_for_break_glass(locked_user):
+    """Operator path (#792): remove the Google link even when it is the last sign-in method.
+
+    Called with the member already locked, by `manage.py break_glass_sign_in
+    --unlink-google`, whose one-time link is the way back in.
+    """
+    if not has_google_account(locked_user):
+        return False
+    SocialAccount.objects.filter(user=locked_user, provider="google").delete()
+    _audit_sign_in_change(locked_user, AuditEvent.Action.GOOGLE_DISCONNECTED)
+    return True
+
+
 @transaction.atomic
 def remove_member_password(user):
     locked = lock_member_for_sign_in_change(user)
