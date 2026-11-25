@@ -7,8 +7,10 @@ lock both accounts of a link in one pk-ordered pass; if the deletion reached
 a counterpart only later, inside delete_account, the two could each hold an
 account the other awaits and PostgreSQL would abort one of them.
 
-Each race runs in both orders. The leaver holds no household membership
-lock, so nothing but the account locks orders the two transactions.
+Each race runs in both orders. Before the fix the leaver held no household
+membership lock, so only the account locks ordered the two transactions. The
+deletion now also locks the memberships of every household whose rows it
+writes (review r2 on #811), which serializes these races at that lock.
 Synthetic data only.
 """
 
