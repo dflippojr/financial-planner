@@ -40,6 +40,7 @@ from .base import (  # noqa: F401
 from .people import (  # noqa: F401
     Household,
     Invitation,
+    BreakGlassGrant,
     LoginThrottle,
     MemberSecurityEvent,
     MemberSession,

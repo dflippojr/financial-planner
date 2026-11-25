@@ -17,6 +17,8 @@ GOOGLE_PENDING_SESSION_KEY = "google_pending"
 GOOGLE_FLOW_BIND_KEY = "google_pending_bind"
 GOOGLE_FLOW_NONCE_STATE_KEY = "google_flow_nonce"
 GOOGLE_FAILED = "Google sign-in failed. Try again later, or use a password if you have one."
+GOOGLE_ONLY_FAILED = "Google sign-in failed. Try again later."
+GOOGLE_ONLY_NOTICE = "Password sign-in is turned off. Use Google."
 
 
 class GoogleOnboardingConflict(Exception):
@@ -28,6 +30,24 @@ def google_signin_enabled():
         (getattr(settings, "GOOGLE_CLIENT_ID", "") or "").strip()
         and (getattr(settings, "GOOGLE_CLIENT_SECRET", "") or "").strip()
     )
+
+
+def google_only_sign_in():
+    """Production mode (#792): Google is the only way in and no password is accepted."""
+    return bool(getattr(settings, "GOOGLE_ONLY_SIGN_IN", False))
+
+
+def password_sign_in_enabled():
+    return not google_only_sign_in()
+
+
+def has_usable_password_sign_in(user):
+    """Whether the member's password can sign them in: never in production mode."""
+    return password_sign_in_enabled() and user.has_usable_password()
+
+
+def google_failed_message():
+    return GOOGLE_FAILED if password_sign_in_enabled() else GOOGLE_ONLY_FAILED
 
 
 def google_throttle_key(remote_address):
@@ -55,7 +75,7 @@ def has_usable_google_sign_in(user):
 
 def sign_in_method_count(user):
     count = 0
-    if user.has_usable_password():
+    if has_usable_password_sign_in(user):
         count += 1
     if has_usable_google_sign_in(user):
         count += 1
@@ -184,7 +204,7 @@ def disconnect_google_account(user):
     locked = lock_member_for_sign_in_change(user)
     if not has_google_account(locked):
         return False
-    if has_usable_google_sign_in(locked) and not locked.has_usable_password():
+    if has_usable_google_sign_in(locked) and not has_usable_password_sign_in(locked):
         return False
     SocialAccount.objects.filter(user=locked, provider="google").delete()
     _audit_sign_in_change(locked, AuditEvent.Action.GOOGLE_DISCONNECTED)

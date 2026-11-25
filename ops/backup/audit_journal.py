@@ -19,6 +19,7 @@ OPERATIONS = frozenset({
     "backup", "offsite_upload", "offsite_prune", "restore", "restore_check", "retention_cleanup",
     "daily_alerts", "seed_first_user", "evict_household_member", "delete_member_data",
     "publish_privacy_policy", "rebuild_transfer_pairs", "sync_simplefin", "generate_monthly_reviews",
+    "break_glass_sign_in",
 })
 PHASES = frozenset({"started", "succeeded", "failed"})
 ACTORS = frozenset({"operator", "scheduler"})

@@ -26,6 +26,7 @@ from .forms import (
 )
 from .google_auth import (
     has_google_account,
+    has_usable_password_sign_in,
 )
 from .lifecycle_services import (
     delete_member_data,
@@ -137,6 +138,7 @@ def account_settings(request):
             "password_form": password_form,
             "has_google": has_google_account(request.user),
             "has_password": request.user.has_usable_password(),
+            "can_disconnect_google": has_usable_password_sign_in(request.user),
             "error": error,
             "security_events": list(events_for(person)[:50]),
             "member_sessions": session_rows,

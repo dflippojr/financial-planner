@@ -29,6 +29,16 @@ def allowed_hosts_from_env(value):
     return [host.strip() for host in value.split(",") if host.strip()]
 
 
+def google_only_sign_in_from_env(value, client_id, client_secret):
+    enabled = (value or "").strip().lower() == "true"
+    if enabled and not (client_id and client_secret):
+        raise ImproperlyConfigured(
+            "GOOGLE_ONLY_SIGN_IN is on, but GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not both set: "
+            "nobody could sign in."
+        )
+    return enabled
+
+
 def git_revision_from_env(value):
     """The first 12 hex digits of the GIT_SHA build arg, or "unknown" if it is not a SHA.
 
@@ -154,10 +164,11 @@ SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "true").lower() 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-# Addresses or CIDRs of the proxy (Tailscale Serve) in front of the app, plus
-# the literal default-gateway. The right-most X-Forwarded-For hop is the client
-# IP only when the connection itself comes from one of these; otherwise the
-# header is ignored. Empty trusts no proxy.
+# Addresses or CIDRs of the proxies in front of the app (Tailscale Serve, the
+# cloudflared connector), plus the literal default-gateway. CF-Connecting-IP,
+# or without it the right-most X-Forwarded-For hop, is the client IP only when
+# the connection itself comes from one of these; otherwise both headers are
+# ignored. Empty trusts no proxy.
 TRUSTED_PROXY_IPS = parse_trusted_proxies(os.environ.get("TRUSTED_PROXY_IPS", ""))
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "true").lower() == "true"
 SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "31536000"))
@@ -187,6 +198,12 @@ SETUP_CODE = os.environ.get("SETUP_CODE", "")
 PRIVACY_POLICY_PATH = os.environ.get("PRIVACY_POLICY_PATH", "").strip()
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+# Production mode (#792): Google is the only way in. No password is accepted
+# at sign-in, confirmation, join, first-run setup or recovery, from loopback
+# and the tailnet too. Break-glass is `manage.py break_glass_sign_in`.
+GOOGLE_ONLY_SIGN_IN = google_only_sign_in_from_env(
+    os.environ.get("GOOGLE_ONLY_SIGN_IN", ""), GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+)
 
 ACCOUNT_ADAPTER = "finance.allauth_adapters.MemberAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "finance.allauth_adapters.MemberSocialAccountAdapter"

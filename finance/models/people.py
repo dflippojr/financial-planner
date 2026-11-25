@@ -159,6 +159,16 @@ class RecoveryCode(models.Model):
     used_at = models.DateTimeField(null=True, blank=True)
 
 
+class BreakGlassGrant(models.Model):
+    """One-time sign-in link issued on the host by `manage.py break_glass_sign_in` (#792)."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="break_glass_grants")
+    token_digest = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+
+
 class LoginThrottle(models.Model):
     key_digest = models.CharField(max_length=64, unique=True)
     failure_count = models.PositiveIntegerField(default=0)
@@ -218,6 +228,8 @@ class MemberSecurityEvent(models.Model):
         SIMPLEFIN_CONNECTION_CHANGED = "simplefin_connection_changed", "SimpleFIN connection changed"
         MEMBER_DATA_EXPORT = "member_data_export", "Data exported"
         POLICY_ACCEPTANCE = "policy_acceptance", "Policy accepted"
+        BREAK_GLASS_ISSUED = "break_glass_issued", "Break-glass sign-in link issued on the host"
+        BREAK_GLASS_SIGN_IN = "break_glass_sign_in", "Signed in with a break-glass link"
 
     member = models.ForeignKey(Person, on_delete=models.CASCADE, related_name="security_events")
     event_type = models.CharField(max_length=40, choices=EventType)
@@ -253,6 +265,8 @@ class MemberSecurityEvent(models.Model):
                         "simplefin_connection_changed",
                         "member_data_export",
                         "policy_acceptance",
+                        "break_glass_issued",
+                        "break_glass_sign_in",
                     )
                 ),
                 name="member_security_event_type_valid",

@@ -16,10 +16,12 @@ from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.models import BreakGlassGrant, LoginThrottle, MemberSecurityEvent
+from allauth.socialaccount.models import SocialAccount
+
+from finance.models import AuditEvent, BreakGlassGrant, LoginThrottle, MemberSecurityEvent
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from tests.test_auth_flows import make_member
-from tests.test_google_auth import _google_settings
+from tests.test_google_auth import GOOGLE_SUB, _finish_google, _google_settings, _id_token
 
 EVENT_TYPES = MemberSecurityEvent.EventType
 LINK = re.compile(r"/break-glass/([A-Za-z0-9_-]{40,})/")
@@ -29,9 +31,9 @@ def _google_only(**extra):
     return _google_settings(GOOGLE_ONLY_SIGN_IN=True, **extra)
 
 
-def _issue(username):
+def _issue(username, **options):
     out = StringIO()
-    call_command("break_glass_sign_in", username=username, stdout=out)
+    call_command("break_glass_sign_in", username=username, stdout=out, **options)
     match = LINK.search(out.getvalue())
     assert match, out.getvalue()
     return match.group(0), match.group(1)
@@ -121,6 +123,38 @@ def test_a_link_for_one_member_never_signs_in_another():
 
     assert client.session["_auth_user_id"] == str(user.pk)
     assert not BreakGlassGrant.objects.filter(user=other).exists()
+
+
+@pytest.mark.django_db
+@_google_only()
+def test_the_google_link_stays_unless_the_operator_asks_to_remove_it():
+    user, _person, _household = make_member()
+    SocialAccount.objects.create(user=user, provider="google", uid="synthetic-lost-sub", extra_data={})
+
+    _issue(user.username)
+
+    assert SocialAccount.objects.filter(user=user, uid="synthetic-lost-sub").exists()
+
+
+@pytest.mark.django_db
+@_google_only()
+def test_a_member_who_lost_their_google_account_connects_another():
+    user, person, _household = make_member()
+    SocialAccount.objects.create(user=user, provider="google", uid="synthetic-lost-sub", extra_data={})
+    path, _token = _issue(user.username, unlink_google=True)
+    assert not SocialAccount.objects.filter(user=user).exists()
+    assert AuditEvent.objects.filter(action=AuditEvent.Action.GOOGLE_DISCONNECTED, effective_member=person).count() == 1
+    client = Client()
+    client.post(path)
+
+    connected = _finish_google(client, client.post(reverse("account-settings"), {"action": "connect-google"}))
+
+    assert connected.status_code == 302
+    assert SocialAccount.objects.filter(user=user, uid=GOOGLE_SUB).exists()
+    client.post(reverse("logout"))
+    signed_in = _finish_google(client, client.post(reverse("google-sign-in")), _id_token())
+    assert signed_in.status_code == 302
+    assert client.session["_auth_user_id"] == str(user.pk)
 
 
 @pytest.mark.django_db
