@@ -1,96 +1,66 @@
-# Windows review runner
+# Linux review runner
 
-The owner applies these host changes. A repository change does not update an
-already running runner. Do not run this installer against the live runner or
-restart it as part of an issue implementation.
+Reviews run on a Linux self-hosted GitHub Actions runner. The routing source of
+truth is [`.github/workflows/review.yml`](../.github/workflows/review.yml):
+`runs_on` is `["self-hosted","Linux","X64","financial-planner-review"]`.
+The caller pins both the reusable workflow and its tooling to `review-v4` in
+`dflippojr/agent-harness`. For provisioning and shared reviewer configuration,
+see [Agent Harness CI/CD, Adopting the review workflow](https://github.com/dflippojr/agent-harness/blob/main/docs/CI-CD.md).
 
-## Controls
+Host installation, service configuration and the job-started hook live outside
+this checkout and are managed by the owner. This repository does not ship a
+Linux runner installer. Do not use the retained `ops/github/*.ps1` files to
+provision it: they are legacy artifacts awaiting removal in
+[#790](https://github.com/dflippojr/financial-planner/issues/790) after the
+owner confirms a real Linux deploy. A repository edit cannot update a running
+runner; do not restart or re-register it as part of an application issue.
 
-- In GitHub **Settings → Actions → General → Fork pull request workflows**, keep
-  **Require approval for all external contributors** selected. The API reports
-  this as `all_external_contributors`.
-- `.github/workflows/review.yml` uses `pull_request_target` and
-  `workflow_dispatch`; its job guard skips fork heads and Dependabot PRs. The
-  shared reviewer also checks the PR before using its head as review context.
-- `ops/github/review-job-started.ps1` is a host-side allow-list. It requires
-  `dflippojr/financial-planner/.github/workflows/review.yml@refs/heads/main`,
-  `GITHUB_REF=refs/heads/main`, and either `pull_request_target` or
-  `workflow_dispatch`. It also checks the event's repository and default branch;
-  PR events must have a base on main and both base and head in this repository.
-  Missing or malformed context and every other job fail before workflow steps.
-  Reusable workflow jobs retain the caller's workflow context; the allow-list
-  names this repository's caller, not the shared Agent Harness implementation.
+## Required controls
 
-The hook is defense in depth, not a sandbox. Labels route jobs; they do not
-provide authorization. The reviewer reads untrusted PR text with shell access.
-A compromised host or permitted review job could alter files accessible to its
-account. Keep the runner separate from production data, Docker administration,
-and the owner's credentials. If the default branch changes, the owner must
-update the hook's explicit `main` allow-list before provisioning replacements.
+- Keep GitHub **Settings → Actions → General → Fork pull request workflows →
+  Require approval for all external contributors** selected (API value
+  `all_external_contributors`).
+- The caller uses `pull_request_target` and `workflow_dispatch`. It skips fork
+  heads and Dependabot PRs on open; the shared reviewer also refuses fork PRs.
+- The owner-managed `ACTIONS_RUNNER_HOOK_JOB_STARTED` allow-list must permit
+  only `dflippojr/financial-planner/.github/workflows/review.yml@refs/heads/main`,
+  `GITHUB_REF=refs/heads/main`, and those two events. Validate the event's
+  repository and default branch; PR events require base `main` and both base
+  and head in this repository. Missing or malformed context must fail before
+  steps run. Reusable jobs retain the caller's workflow context.
+- Use a dedicated non-root Linux account. Keep runner and hook directories
+  writable only by that account and operators, with the hook outside the PR
+  checkout. Keep production data, the Docker socket and the owner's credentials
+  inaccessible to it. Labels route jobs; they do not authorize them.
+- Prefer one-job ephemeral registration and a fresh installation for each job.
+  Preserve `_diag` logs in operator-controlled storage, confirm the old runner
+  exited, then clean its workspace and provision with a verified runner archive
+  and fresh registration token. Keep tokens out of source, history and logs.
+  Ephemeral registration does not erase files or credentials or create a fresh
+  host; a disposable host provides stronger isolation.
 
-## Owner installation
+These are the required host controls, not evidence of their installed state.
+The hook is defense in depth: the reviewer reads untrusted PR text with shell
+access. The owner verifies the effective hook path and permissions, non-root
+service identity, accepted/rejected synthetic contexts and **Set up runner** hook
+log when applying host changes. If the default branch changes, update its
+explicit allow-list before provisioning replacements.
 
-1. Create a dedicated **standard (non-administrator)** Windows account for
-   reviews. Sign in as that account and provision only the review tools and
-   credentials it needs. Do not copy the owner's profile or financial data.
-   Restrict the runner and hook directories' ACLs to this account and operators;
-   other local users must not be able to replace the hook.
-2. Copy these scripts from the trusted default branch. Use a new, empty runner
-   directory and a separate hook directory outside the checkout. The installer
-   verifies the pinned runner archive's SHA-256. It refuses an existing
-   `-InstallDir` that is not empty, and it refuses a `.runner` file that indicates
-   an existing registration, so an old runner, registration, or `.env` never
-   carries into a reinstall. It also refuses an elevated administrator token; the
-   account must still be a standard account even when not elevated.
-3. Obtain a fresh repository registration token through an authorized operator.
-   Supply it in memory to the account running the installer; never save it in
-   source, shell history, task arguments, or logs. For example, where that account
-   has the required GitHub permission:
+## Operator checks
 
-   ```powershell
-   $token = gh api -X POST repos/dflippojr/financial-planner/actions/runners/registration-token --jq .token
-   .\ops\github\install-runner.ps1 -Token $token
-   Remove-Variable token
-   ```
+From a trusted checkout, inspect the caller and list repository runners:
 
-   Defaults are `D:\Agents\financial-planner-review`, runner name and label
-   `financial-planner-review`, and task `FinancialPlanner-GitHubRunner-Review`.
-   The installer copies the hook to `D:\Agents\financial-planner-review-hooks`
-   and writes its absolute path as `ACTIONS_RUNNER_HOOK_JOB_STARTED` in the
-   runner's `.env`. That file contains only this line; keys from earlier installs
-   are not carried over. Custom `-InstallDir`, `-HookDir`, `-Name`, and `-TaskName`
-   allow separate pool members.
-4. The hidden task starts immediately and at logon under this same account,
-   with `RunLevel Limited` and an interactive logon. It does not install a
-   system service or run as SYSTEM. The account must remain signed in.
+```bash
+sed -n '1,120p' .github/workflows/review.yml
+gh api repos/dflippojr/financial-planner/actions/runners \
+  --jq '.runners[] | {name, os, status, busy, labels: [.labels[].name]}'
+```
 
-## One-job lifecycle
-
-Registration uses `--ephemeral`: GitHub assigns one job, then deregisters the
-runner. The logon task cannot register it again and no token is stored for
-automatic re-registration. An owner must provision another runner before the
-next review; queued reviews wait for an available registration.
-
-After each job, preserve `_diag` logs in operator-controlled storage outside
-the disposable installation, confirm the runner process has exited, and remove
-its old scheduled task. Clean the work directory and reprovision from trusted
-scripts and a verified archive in a fresh directory with a fresh token. Keep
-review credentials narrowly scoped. Ephemeral registration does **not** erase
-the Windows profile, workspace, credentials, or logs and does not itself provide
-a fresh host. A disposable host gives stronger isolation where available.
-
-For an existing persistent runner, the owner must arrange its retirement and
-replacement separately. This installer deliberately does not migrate or
-re-register that runner in place.
-
-## Verification
-
-Run `python -m pytest tests/test_review_runner.py -q` with PowerShell available
-(`pwsh`, or `powershell.exe` on Windows). The tests exercise accepted and rejected
-synthetic event contexts and mock download, registration, and scheduled-task
-operations; they never change the live runner. These script tests skip on hosts
-without PowerShell. Verify the deployed `.env`, hook ACLs, limited task identity,
-and the **Set up runner** hook log when the owner applies the change.
+Expect an online Linux runner with all four routing labels when a review is
+ready to run; an ephemeral runner may disappear after its job. Compare the
+actual service and hook with the owner's provisioning record rather than
+assuming these labels prove isolation. Dispatch a review only for the intended
+PR: `gh workflow run review.yml -f pr_number=N -f mode=full` (replace `N`).
 
 References: [GitHub job hooks](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/run-scripts)
 and [ephemeral registration](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#ephemeral-runners-for-autoscaling).

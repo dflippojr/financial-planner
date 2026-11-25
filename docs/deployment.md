@@ -1,13 +1,13 @@
 # Basement PC deployment
 
-This runbook deploys the first release to the Windows basement PC with Docker Desktop's WSL2 backend. The application is available only through the existing Tailscale tailnet: Docker publishes the application on Windows loopback, and `tailscale serve` terminates HTTPS and proxies to that loopback port. PostgreSQL is not published to the host or network.
+This runbook deploys to the Linux basement PC with Docker Engine and the Compose plugin. The application is available only through the existing Tailscale tailnet: Docker publishes the application on Linux loopback, and `tailscale serve` terminates HTTPS and proxies to that loopback port. PostgreSQL is not published to the host or network.
 
 ## Storage and network boundaries
 
 | Item | Location | Retention or exposure |
 |---|---|---|
 | Application source and synthetic fixture | Git checkout | Code only; never add populated environment files, CSV exports, database files, or dumps. |
-| Secrets and per-machine settings | A protected file outside the checkout, such as `D:/financial-planner-config/production.env` | Keep until rotated; restrict its Windows permissions to the operator account. |
+| Secrets and per-machine settings | A protected file outside the checkout, such as `/path/to/financial-planner-config/production.env` | Keep until rotated; restrict its permissions to the operator account. |
 | PostgreSQL data | Docker named volume selected by `POSTGRES_VOLUME_NAME` | Durable across container replacement; never commit or manually edit it. |
 | Receipt files | Docker named volume selected by `RECEIPTS_VOLUME_NAME` (`RECEIPTS_DIR=/receipts`) | Durable across container replacement. Served only through access-checked views, never as static or media files. Deleting a receipt drops the database row immediately; the file is removed within about two days. Nightly backups archive this directory next to the database dump and keep deleted receipts' files until those copies rotate out. |
 | Logical backups | `BACKUP_DIR` on the second local disk | Keep the 14 newest nightly dumps and 8 newest Sunday weekly copies. |
@@ -20,28 +20,33 @@ Django still requires a valid signed-in session after a request reaches the app.
 
 ## First deployment
 
-Prerequisites are Docker Desktop configured to use WSL2 and start when Windows signs in, Tailscale connected to the intended tailnet, Git, and a second local disk for backups. Run these commands in PowerShell from the checkout.
+Prerequisites are Docker Engine with the Compose plugin, Tailscale connected to the intended tailnet, Git, Bash, host Python 3.10+ (stdlib only for the post-deploy check), curl, and a mounted second local disk for backups. Enable the Docker and Tailscale services at boot using the host's service manager; on a systemd host the owner checks `systemctl is-enabled docker tailscaled` and `systemctl is-active docker tailscaled`. Containers with `restart: unless-stopped` resume when the daemon starts unless explicitly stopped.
+
+Run the Bash commands from the deployed checkout, for example `/path/to/financial-planner`. Every `/path/to/...` below is a placeholder: substitute the host's protected paths, and keep populated configuration and backup data outside the checkout. Do not source the env file in your shell; Compose reads it.
 
 1. Create protected configuration and backup directories outside the checkout:
 
-   ```powershell
-   New-Item -ItemType Directory -Force D:\financial-planner-config
-   New-Item -ItemType Directory -Force E:\financial-planner-backups
-   Copy-Item .env.example D:\financial-planner-config\production.env
+   ```bash
+   umask 077
+   Config='/path/to/financial-planner-config/production.env'
+   BackupDir='/path/to/financial-planner-backups'
+   install -d -m 700 "$(dirname "$Config")" "$BackupDir"
+   cp .env.example "$Config"
+   chmod 600 "$Config"
    ```
 
-2. Edit `D:\financial-planner-config\production.env`. Replace both example secrets, use the basement PC's MagicDNS name for `DJANGO_ALLOWED_HOSTS`, use the matching `https://` URL for `DJANGO_CSRF_TRUSTED_ORIGINS`, and set `BACKUP_DIR=E:/financial-planner-backups`. Generate the Django secret and database password independently. One PowerShell option for each is:
+2. Edit `/path/to/financial-planner-config/production.env`. Replace both example secrets, use the basement PC's MagicDNS name for `DJANGO_ALLOWED_HOSTS`, use the matching `https://` URL for `DJANGO_CSRF_TRUSTED_ORIGINS`, and set `BACKUP_DIR=/path/to/financial-planner-backups`. Generate the Django secret and database password independently. Generate each with host Python:
 
-   ```powershell
-   [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
    ```
 
    Do not reuse the example values. Keep `DJANGO_SECURE_COOKIES` and redirect behavior at their production defaults in `compose.yml`. Leave `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` empty until you finish the Google Cloud Console steps below; password-only sign-in works without them.
 
    Set `FIELD_ENCRYPTION_KEY` to a Fernet key. Losing it means every member must reconnect SimpleFIN; backups keep only ciphertext. Generate one:
 
-   ```powershell
-   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```bash
+   python3 -c "import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
    ```
 
    `AUDIT_RETENTION_DAYS` (default 90) and `AUDIT_PURGE_BATCH_SIZE` (default 1000) control how long the in-app audit trail is kept; see [the audit trail](audit-trail.md).
@@ -50,12 +55,12 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
 
 3. Validate, build, migrate, and start the stack:
 
-   ```powershell
-   $Config = 'D:\financial-planner-config\production.env'
-   $env:GIT_SHA = git rev-parse HEAD
-   docker compose --env-file $Config config --quiet
-   docker compose --env-file $Config up -d --build
-   docker compose --env-file $Config ps
+   ```bash
+   Config='/path/to/financial-planner-config/production.env'
+   export GIT_SHA="$(git rev-parse HEAD)"
+   docker compose --env-file "$Config" config --quiet
+   docker compose --env-file "$Config" up -d --build
+   docker compose --env-file "$Config" ps
    ```
 
    `GIT_SHA` records the checked-out commit in each image, and `/health/` reports it (see [production signals](production-signals.md)). Without it the images say `unknown` and the post-deploy check fails.
@@ -64,19 +69,19 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
 
 4. Configure persistent tailnet-only HTTPS using the current Tailscale CLI syntax:
 
-   ```powershell
+   ```bash
    tailscale serve --bg http://127.0.0.1:8000
    tailscale serve status
    ```
 
-   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto` and `X-Forwarded-For`. Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Inside the container, Serve's connections to the loopback-published port arrive from the compose network's gateway, so compose sets `TRUSTED_PROXY_IPS=default-gateway` for the app service and the app reads that address from its route table at start-up. Sign-in and session logs, and the sign-in throttle, then use the right-most `X-Forwarded-For` address (the hop Serve added). A connection from any other address, such as another container connecting directly to `app:8000`, has its `X-Forwarded-For` ignored. Anything else on the host that reaches the published port also arrives from the gateway, and so does a container that goes through `host.docker.internal` to that port (the `app` and `background` services map it, and on Docker Desktop any container can resolve it), so the per-username sign-in limit in [authentication](authentication.md) still bounds password guessing from there. Override `TRUSTED_PROXY_IPS` in the env file only for a different proxy layout; set it to an empty value to ignore `X-Forwarded-For` entirely. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto` and `X-Forwarded-For`. Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Inside the container, Serve's connections to the loopback-published port arrive from the compose network's gateway, so compose sets `TRUSTED_PROXY_IPS=default-gateway` for the app service and the app reads that address from its route table at start-up. Sign-in and session logs, and the sign-in throttle, then use the right-most `X-Forwarded-For` address (the hop Serve added). A connection from any other address, such as another container connecting directly to `app:8000`, has its `X-Forwarded-For` ignored. Anything else on the host that reaches the published port also arrives from the gateway, and so does a container that goes through `host.docker.internal` to that port (the `app` and `background` services map it to the host gateway), so the per-username sign-in limit in [authentication](authentication.md) still bounds password guessing from there. Override `TRUSTED_PROXY_IPS` in the env file only for a different proxy layout; set it to an empty value to ignore `X-Forwarded-For` entirely. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
    **When the PC already runs other services**, check before choosing ports:
 
-   - Run `netstat -ano | findstr LISTENING` and pick an unused loopback `APP_PORT`. Another container, such as Portainer, often holds 8000.
+   - Run `ss -ltn` and pick an unused loopback `APP_PORT`. Another container, such as Portainer, often holds 8000.
    - Run `tailscale serve status` first. The command above maps the default HTTPS port (443). If 443 already proxies another app, running it replaces that mapping. Add the app on its own HTTPS port instead, one that is neither listed in `tailscale serve status` nor listening on the tailnet address:
 
-     ```powershell
+     ```bash
      tailscale serve --bg --https=10443 http://127.0.0.1:8210
      ```
 
@@ -85,24 +90,24 @@ Prerequisites are Docker Desktop configured to use WSL2 and start when Windows s
 
 5. Create the first account. Set `SETUP_CODE` in the env file to a long random value. The same generator as in step 2 works. A running container does not reread the env file, so recreate the app if the stack is already up:
 
-   ```powershell
-   docker compose --env-file $Config up -d --force-recreate app
+   ```bash
+   docker compose --env-file "$Config" up -d --force-recreate app
    ```
 
    Then open `/setup/` on the HTTPS MagicDNS URL. Enter the code with a username, display name, household name, and password, read the privacy and data policy, and save the one-time recovery codes. Accepting the policy is optional at setup. They are shown only once. After the first member exists, `/setup/` returns 404. You can then remove `SETUP_CODE` from the env file. If you do, recreate the app the same way. When Google sign-in is configured, the page also offers **Set up with Google**; the setup code is still required before the redirect to Google.
 
    To use your own policy text, set `PRIVACY_POLICY_PATH` to a file (or a directory that contains `privacy-policy.md`) that is visible inside the app container, then publish:
 
-   ```powershell
-   docker compose --env-file $Config exec app python manage.py publish_privacy_policy --material
+   ```bash
+   docker compose --env-file "$Config" exec app python manage.py publish_privacy_policy --material
    ```
 
    Omit `--material` for typo-fix versions that should not ask members to accept again. `/privacy-policy/` is public and shows the current version and date.
 
    The CLI still works if you prefer not to use the browser page:
 
-   ```powershell
-   docker compose --env-file $Config exec app python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"
+   ```bash
+   docker compose --env-file "$Config" exec app python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"
    ```
 
 ## Google Cloud Console (optional sign-in)
@@ -119,22 +124,22 @@ Google sign-in stays off until both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET
 
 `GET /health/` is intentionally unauthenticated so Docker and an operator can monitor readiness. It performs `SELECT 1` and returns only `ok` with HTTP 200 or `unavailable` with HTTP 503; it never returns financial records, database names, credentials, or error details. Its `X-App-Revision` header is the short SHA the image was built from. [Production signals](production-signals.md) lists the read-only commands for every other signal: restarts, tracebacks, backup state and reconciliation.
 
-```powershell
-Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
-docker compose --env-file $Config ps
-docker compose --env-file $Config logs --tail 50 app backup background db
+```bash
+curl --fail --silent --show-error https://BASEMENT-PC.MAGICDNS-NAME/health/
+docker compose --env-file "$Config" ps
+docker compose --env-file "$Config" logs --tail 50 app backup background db
 ```
 
 The container health check (`python -m financial_planner.healthcheck`) probes the app on loopback using the first concrete entry of `DJANGO_ALLOWED_HOSTS` as its `Host` header, because Django rejects any host that is not allowed. Put the MagicDNS name first and do not start the list with `*`; otherwise the container can be reported unhealthy while the app works.
 
-All four long-running containers use `restart: unless-stopped`, and the Tailscale Windows service starts automatically. Docker Desktop, however, starts only when a Windows user signs in. After a reboot the app is unavailable until someone signs in to the basement PC. Confirm that **Start Docker Desktop when you sign in** is enabled in Docker Desktop settings.
+All four long-running containers use `restart: unless-stopped`. Confirm Docker and Tailscale start at boot, the backup disk is mounted before Compose starts, and the app is reachable through Serve after a host reboot; no interactive sign-in should be needed.
 
-Application logs must not be used for transaction details or raw import rows. Stop the deployment with `docker compose --env-file $Config stop`; do not add `--volumes` when stopping or updating it.
+Application logs must not be used for transaction details or raw import rows. Stop the deployment with `docker compose --env-file "$Config" stop`; do not add `--volumes` when stopping or updating it.
 
 A household member can only leave through the application. To end someone else's current membership from the basement PC, run:
 
-```powershell
-docker compose --env-file $Config exec app python manage.py evict_household_member --username USERNAME
+```bash
+docker compose --env-file "$Config" exec app python manage.py evict_household_member --username USERNAME
 ```
 
 That applies the same shared-account exit rules as leaving. It prints a short confirmation and does not name accounts, transactions, or amounts. An unknown username, a person with no current membership, and a repeated eviction each fail with a clear message.
@@ -161,29 +166,29 @@ The check needs a server at least as new as the backup image's `pg_restore` (18)
 
 When the check fails:
 
-1. Read the message on Settings → Data or in `Get-Content E:\financial-planner-backups\health\status`, and the backup logs (`docker compose --env-file $Config logs --tail 50 backup`).
-2. Run the check by hand against the newest dump: `docker compose --env-file $Config run --rm backup /opt/financial-planner/verify-restore.sh /backups/nightly/<newest dump>`. If it passes now, the failure was transient (for example, the server was restarting). The next scheduled check clears the alert.
+1. Read the message on Settings → Data or in `python3 scripts/prod_signals.py backup-status "$BackupDir/health/status"`, and the backup logs (`docker compose --env-file "$Config" logs --tail 50 backup`).
+2. Run the check by hand against the newest dump: `docker compose --env-file "$Config" run --rm backup /opt/financial-planner/verify-restore.sh /backups/nightly/<newest dump>`. If it passes now, the failure was transient (for example, the server was restarting). The next scheduled check clears the alert.
 3. If it fails again, treat that dump as unusable: confirm an older dump restores with the same command, and take a fresh manual backup (see below) and check it. A table count mismatch or a missing core table usually means the dump was taken from the wrong database or during a broken migration; investigate before relying on any newer dump.
 
 ### Encrypted off-site copy
 
 When both `OFFSITE_RCLONE_REMOTE` and `OFFSITE_AGE_RECIPIENT` are set, each verified dump and its receipts archive are encrypted with `age` to that public key and uploaded with rclone. Remote nightly and weekly prefixes keep the same 14 and 8 file retention per kind, pruned by name. An upload failure is recorded in `offsite_error` (the local dump stays published) and alerts operators. A configured off-site copy whose last success is older than 26 hours is also unhealthy.
 
-1. Install rclone on a trusted machine, run `rclone config`, and save the file outside the checkout. Set `OFFSITE_RCLONE_CONFIG` in `production.env` to that path (forward slashes on Windows). The backup container mounts only that file, read-only, as `/config/rclone.conf`. Leave the variable unset to use the committed empty placeholder.
+1. Install rclone on a trusted machine, run `rclone config`, and save the file outside the checkout. Set `OFFSITE_RCLONE_CONFIG` in `production.env` to that path (an absolute Linux path). The backup container mounts only that file, read-only, as `/config/rclone.conf`. Leave the variable unset to use the committed empty placeholder.
 2. Create an age key pair on a trusted machine (`age-keygen`). Put the **public** key in `OFFSITE_AGE_RECIPIENT`. Keep the private key in a password manager. The private key must never live on the tower.
 3. Set `OFFSITE_RCLONE_REMOTE` to the rclone destination, for example `b2:bucket/financial-planner` or `drive:financial-planner-backups`. Recreate the backup container after editing `production.env`.
-4. After the first backup run, store `$BACKUP_DIR\signing\backup-signing-key.pub` in the password manager next to the age private key. A restore after losing the tower needs it to verify downloaded files. The private signing key is never uploaded; do not copy it off the tower.
+4. After the first backup run, store `$BACKUP_DIR/signing/backup-signing-key.pub` in the password manager next to the age private key. A restore after losing the tower needs it to verify downloaded files. The private signing key is never uploaded; do not copy it off the tower.
 5. Protect old copies on the remote. `age -r` encrypts but does not authenticate: anyone who can write to the remote can replace a file with one encrypted to the same public recipient. The signed manifest catches that at restore time but cannot bring back a deleted or overwritten copy. Turn on object versioning and keep prior versions for longer than 14 days (for example a B2 lifecycle rule that keeps hidden versions for 30 days); the nightly prune then only hides old copies. A write-only credential or object lock that forbids deletes also works, but remote pruning then fails and raises the off-site alert every night, so prune old copies from a trusted machine and expect that alert. Each upload also sends the manifest and its signature in the clear; they hold only file names and digests.
 
 Example remote names include Backblaze B2, Google Drive, and OneDrive. A NAS can be another rclone remote later.
 
 Run and verify an extra backup before an upgrade or restore drill:
 
-```powershell
-docker compose --env-file $Config run --rm backup /opt/financial-planner/backup.sh
-Get-ChildItem E:\financial-planner-backups\nightly
-Get-Content E:\financial-planner-backups\health\status
-docker compose --env-file $Config logs --tail 50 backup
+```bash
+docker compose --env-file "$Config" run --rm backup /opt/financial-planner/backup.sh
+ls -l "$BackupDir/nightly"
+python3 scripts/prod_signals.py backup-status "$BackupDir/health/status"
+docker compose --env-file "$Config" logs --tail 50 backup
 ```
 
 The backup directory is a bind mount from the second disk, not part of the database volume or image. Monitor that disk's free space and confirm new nightly files appear.
@@ -192,36 +197,36 @@ The backup directory is a bind mount from the second disk, not part of the datab
 
 Use a fresh named volume so the old database remains available for investigation or rollback. The commands below cause downtime and assume `BACKUP_DIR` still points to the directory containing the selected dump. For an off-site copy, download the `.dump.age` file, the matching `.receipts.tar.gz.age` file, and `financial_planner_YYYYMMDDTHHMMSSZ.sha256` with its `.sha256.sig`. Decrypt both archives with the age private key, then verify them against the signing public key saved in the password manager, never one downloaded from the remote:
 
-```powershell
-age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.dump financial_planner_YYYYMMDDTHHMMSSZ.dump.age
-age -d -i $AgeIdentity -o financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz.age
-"financial-planner-backup $(Get-Content $SigningPublicKey)" | Set-Content -Encoding ascii allowed_signers
-cmd /c "ssh-keygen -Y verify -f allowed_signers -I financial-planner-backup -n financial-planner-backup -s financial_planner_YYYYMMDDTHHMMSSZ.sha256.sig < financial_planner_YYYYMMDDTHHMMSSZ.sha256"
-Get-FileHash -Algorithm SHA256 financial_planner_YYYYMMDDTHHMMSSZ.dump, financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz
+```bash
+age -d -i "$AgeIdentity" -o financial_planner_YYYYMMDDTHHMMSSZ.dump financial_planner_YYYYMMDDTHHMMSSZ.dump.age
+age -d -i "$AgeIdentity" -o financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz financial_planner_YYYYMMDDTHHMMSSZ.receipts.tar.gz.age
+printf 'financial-planner-backup %s\n' "$(cat "$SigningPublicKey")" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I financial-planner-backup -n financial-planner-backup -s financial_planner_YYYYMMDDTHHMMSSZ.sha256.sig < financial_planner_YYYYMMDDTHHMMSSZ.sha256
+sha256sum --check financial_planner_YYYYMMDDTHHMMSSZ.sha256
 ```
 
-`ssh-keygen` must print `Good "financial-planner-backup" signature`, and each hash must match its line in the manifest (ignoring case). Copy the decrypted dump, receipts archive, manifest and signature into `E:\financial-planner-backups\nightly\` (or pass the dump path to `restore.sh`; the other three files must sit next to it). `restore.sh` checks them again before touching the database. It reads the public key from `$BACKUP_DIR/signing/backup-signing-key.pub`. On a rebuilt tower, save the public key from the password manager to a file under `$BACKUP_DIR` and add `-e BACKUP_SIGNING_PUBLIC_KEY=/backups/<that file>` to the `docker compose run` restore command. Do not copy the age private key onto the tower.
+`ssh-keygen` must print `Good "financial-planner-backup" signature`, and `sha256sum` must report OK for both files. Copy the decrypted dump, receipts archive, manifest and signature into `/path/to/financial-planner-backups/nightly/` (or pass the dump path to `restore.sh`; the other three files must sit next to it). `restore.sh` checks them again before touching the database. It reads the public key from `$BACKUP_DIR/signing/backup-signing-key.pub`. On a rebuilt tower, save the public key from the password manager to a file under `$BACKUP_DIR` and add `-e BACKUP_SIGNING_PUBLIC_KEY=/backups/<that file>` to the `docker compose run` restore command. Do not copy the age private key onto the tower.
 
 `restore.sh` refuses, before restoring anything, when the manifest or signature is missing, the signature does not verify, or either file's digest differs from the manifest. It also refuses a receipts archive containing an absolute path, a `..` component, a link or a device, whether or not the manifest verified. Dumps from before this release have no manifest: after confirming where such a file came from, add `-e RESTORE_ALLOW_UNVERIFIED=1` to restore it with a warning. The override never relaxes the receipts filter. If a sibling receipts archive is present, restore puts it into `RECEIPTS_DIR`; if that archive is missing (backups from before receipts were archived), the database is still restored and the live receipts directory is left unchanged. Continue with the local procedure.
 
 1. Choose a known-good file and stop writers:
 
-   ```powershell
-   $Config = 'D:\financial-planner-config\production.env'
-   $Dump = 'financial_planner_YYYYMMDDTHHMMSSZ.dump'
-   docker compose --env-file $Config stop app backup background db
+   ```bash
+   Config='/path/to/financial-planner-config/production.env'
+   Dump='financial_planner_YYYYMMDDTHHMMSSZ.dump'
+   docker compose --env-file "$Config" stop app backup background db
    ```
 
 2. In `production.env`, change `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres-data-restored-YYYYMMDD`. Change `RECEIPTS_VOLUME_NAME` to a matching new receipts volume such as `financial-planner-receipts-restored-YYYYMMDD`. Do not delete or reuse the old volumes.
 
 3. Start empty PostgreSQL, restore, and start the application:
 
-   ```powershell
-   docker compose --env-file $Config up -d db
-   docker compose --env-file $Config run --rm backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
-   docker compose --env-file $Config up -d app backup background
-   docker compose --env-file $Config ps
-   Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+   ```bash
+   docker compose --env-file "$Config" up -d db
+   docker compose --env-file "$Config" run --rm backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
+   docker compose --env-file "$Config" up -d app backup background
+   docker compose --env-file "$Config" ps
+   curl --fail --silent --show-error https://BASEMENT-PC.MAGICDNS-NAME/health/
    ```
 
 4. Sign in and verify expected synthetic or real records according to the purpose of the restore. Keep the old volume until the owner explicitly accepts the restored database. Volume deletion is intentionally not part of this runbook.
@@ -232,12 +237,12 @@ When deploying #249 for the first time, take the usual verified backup, then
 **while the old revision's Compose file is still checked out**, stop the old
 background services:
 
-```powershell
-docker compose --env-file $Config stop simplefin-sync ai-jobs
+```bash
+docker compose --env-file "$Config" stop simplefin-sync ai-jobs
 ```
 
 Check out the approved revision, build `app backup background`, and use
-`docker compose --env-file $Config up -d --remove-orphans` once. This removes
+`docker compose --env-file "$Config" up -d --remove-orphans` once. This removes
 the stopped `simplefin-sync` and `ai-jobs` containers and starts `background`.
 Do not run both generations of background services together. This PR adds no env variable,
 database migration, volume rename, or data conversion. Startup still applies
@@ -273,41 +278,59 @@ Calculated past balances (#636) add migration 0078, which adds `calculated` to `
 
 Review release notes and take a verified manual backup first. **If the release adds a migration (any new file under `finance/migrations/` since the running revision), deploy only after the [deploy rehearsal](#deploy-rehearsal) prints PASS for it.** Then, in the checkout on `main`, note the running revision, pull the approved one, and run:
 
-```powershell
-$PreviousSha = git rev-parse HEAD
-git pull --ff-only origin main
-$env:GIT_SHA = git rev-parse HEAD
-$DeployStart = Get-Date
-$EventLog = Join-Path $env:TEMP "financial-planner-events-$($DeployStart.ToString('yyyyMMddHHmmss')).log"
-$Recorder = Start-Process docker -NoNewWindow -PassThru -RedirectStandardOutput $EventLog -ArgumentList 'events --filter type=container --filter label=com.docker.compose.project=financial-planner --filter event=create --filter event=start --format "{{.TimeNano}} {{.Action}} {{.Actor.ID}}"'
-docker compose --env-file $Config build --pull app backup background
-docker compose --env-file $Config up -d
-docker compose --env-file $Config ps
-.\ops\post-deploy-check.ps1 -ConfigPath $Config -Since $DeployStart -EventLog $EventLog
-Stop-Process -Id $Recorder.Id
+Use a Bash subshell so the event recorder is stopped on success, failure or interruption:
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  Config='/path/to/financial-planner-config/production.env'
+  PreviousSha="$(git rev-parse HEAD)"
+  printf '%s\n' "$PreviousSha" > /path/to/financial-planner-config/revision-before.txt
+  git pull --ff-only origin main
+  export GIT_SHA="$(git rev-parse HEAD)"
+  DeployStart="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  EventLog="$(mktemp /path/to/financial-planner-config/deploy-events.XXXXXXXX.log)"
+  Recorder=''
+  trap 'if [ -n "$Recorder" ]; then kill "$Recorder" 2>/dev/null || true; wait "$Recorder" 2>/dev/null || true; fi' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  docker events --since "$DeployStart" --filter type=container \
+    --filter label=com.docker.compose.project=financial-planner \
+    --filter event=create --filter event=start \
+    --format '{{.TimeNano}} {{.Action}} {{.Actor.ID}}' > "$EventLog" &
+  Recorder=$!
+  docker compose --env-file "$Config" build --pull app backup background
+  kill -0 "$Recorder"  # recorder must still be running before up
+  docker compose --env-file "$Config" up -d
+  docker compose --env-file "$Config" ps
+  python3 ops/post-deploy-check.py --config-path "$Config" --since "$DeployStart" --event-log "$EventLog"
+)
 ```
 
-`$Recorder` records the deploy's container `create` and `start` events into `$EventLog` as they happen, which the check counts to prove each new container started once. Start it before `up -d` (the build gives it time to connect) and stop it only after the check exits. Docker's own event history is bounded, and other containers on the tower can push the deploy out of it within the check's two minutes (#717). Without `-EventLog` the check falls back to that history and fails when it no longer reaches the deploy. The check also requires each new container's last recorded start to be no older than the `StartedAt` that `docker inspect` reports, compared to the nanosecond with no tolerance. Docker sets `StartedAt` before it logs that start, so a restart the recorder missed, however soon, fails the check. Independently of the log, a new container whose `FinishedAt` is set has stopped since it was created, so a running one has started again, and the check fails. If the check reports that the event log is missing, does not reach a deploy, has no start for a running container or missed a start, the recorder was not running for the whole deploy: stop it, then repeat the deploy with a fresh `$DeployStart` and recorder. The log holds only event times, event names and container IDs.
+`Recorder` records the deploy's container `create` and `start` events into `EventLog` as they happen. Start it before `up -d` and keep it running until the check exits. `--since` also retrieves events since the recorded start if the connection takes a moment. Docker's own event history is bounded; other containers can push the deploy out of it within the check's two minutes (#717). Without `--event-log` the check falls back to that history and fails when it no longer reaches the deploy.
+
+The check requires each new container's last recorded start to be no older than its `StartedAt`, compared to the nanosecond with no tolerance. A set `FinishedAt` independently proves a running new container stopped and started again. If evidence is missing or incomplete, investigate the recorder and repeat with a fresh deploy start and log; a log contains only event times, event names and container IDs. The trap stops only this subshell's recorder and preserves its log for diagnosis.
 
 Starting the new app applies all pending Django migrations before Gunicorn accepts traffic. `background` waits for the app to report healthy, so it never runs against a database that has not been migrated yet. The one-shot `config-check` runs `background`'s image (`financial-planner-background`), so building `background` is what updates it; there is no separate `config-check` image to build.
 
-`ops/post-deploy-check.ps1` only reads. It takes about two minutes and exits non-zero with one line per problem: `/health/` not 200; the deployed SHA (the `X-App-Revision` header and the image label of `app`, `backup`, `background` and the exited `config-check`) not `origin/main`; a container not running or restarting; any traceback logged since `$DeployStart`; or the backup status file missing or in error. [Production signals](production-signals.md) explains each signal. A line saying a service "runs an image built from" an older SHA means it was not recreated, as `backup` has done: recreate it with `docker compose --env-file $Config up -d --force-recreate <service>` and run the check again with a fresh `$DeployStart`.
+`ops/post-deploy-check.py` only reads. It takes about two minutes and exits non-zero with one line per problem: `/health/` not 200; the deployed SHA (the `X-App-Revision` header and the image label of `app`, `backup`, `background` and the exited `config-check`) not `origin/main`; a container not running or restarting; any traceback logged since `DeployStart`; or the backup status file missing or in error. [Production signals](production-signals.md) explains each signal. A line saying a service "runs an image built from" an older SHA means it was not recreated, as `backup` has done: recreate it with `docker compose --env-file "$Config" up -d --force-recreate <service>` and run the check again with a fresh `DeployStart`.
 
 If any other check fails, roll back:
 
-1. Inspect bounded logs with `docker compose --env-file $Config logs --tail 100 app background db`; do not repeatedly restart or run migrations by hand.
-2. Keep a copy of the check, because the previous revision may predate it:
+1. Inspect bounded logs with `docker compose --env-file "$Config" logs --tail 100 app background db`; do not repeatedly restart or run migrations by hand.
+2. Keep a copy of the check and its helper outside the checkout, because the previous revision may predate them:
 
-   ```powershell
-   $Tools = Join-Path $env:TEMP 'financial-planner-post-deploy'
-   New-Item -ItemType Directory -Force "$Tools\ops", "$Tools\scripts" | Out-Null
-   Copy-Item ops\post-deploy-check.ps1 "$Tools\ops\"
-   Copy-Item scripts\prod_signals.py "$Tools\scripts\"
+   ```bash
+   Tools='/path/to/financial-planner-config/post-deploy-tools'
+   install -d -m 700 "$Tools/ops" "$Tools/scripts"
+   cp ops/post-deploy-check.py "$Tools/ops/"
+   cp scripts/prod_signals.py "$Tools/scripts/"
    ```
 
-3. Return to the previous code: `git checkout --detach $PreviousSha`, set `$env:GIT_SHA = $PreviousSha`, and run the same `build` and `up -d` commands, recording a fresh `$DeployStart`, `$EventLog` and `$Recorder` first. If the previous revision predates `config-check` (#560), run `up -d --remove-orphans` instead, which removes the failed release's exited `config-check`; the check would otherwise report its newer image.
-4. If the failed release applied migrations the previous code cannot run against, restore the pre-upgrade dump into a fresh volume using the procedure above.
-5. Run the copied check: `& "$Tools\ops\post-deploy-check.ps1" -ConfigPath $Config -Since $DeployStart -ExpectedSha $PreviousSha -EventLog $EventLog`, then `Stop-Process -Id $Recorder.Id`. A copy from before #717 takes no `-EventLog`; leave it out for that copy. A revision older than #537 builds images without the SHA label or header, so add `-SkipRevision` for it and confirm the revision with `git rev-parse HEAD` instead. Then open an issue with the failing lines from the first run, which carry no financial data.
+3. Read `PreviousSha` from the protected `revision-before.txt`, return to that code with `git checkout --detach "$PreviousSha"`, and set `export GIT_SHA="$PreviousSha"`. Repeat the subshell above from `DeployStart` onward, building and starting the previous revision, and replace its check command with `python3 "$Tools/ops/post-deploy-check.py" --config-path "$Config" --since "$DeployStart" --expected-sha "$PreviousSha" --event-log "$EventLog"`. Do not pull `main` during rollback. If the revision predates `config-check` (#560), use `up -d --remove-orphans` so the failed release's exited check is removed.
+4. If the failed release applied migrations the previous code cannot run against, restore the pre-upgrade dump into fresh database and receipts volumes using the procedure above before starting the old app.
+5. A revision older than #537 builds images without a SHA label or header; add `--skip-revision` only for it and confirm `git rev-parse HEAD` matches `PreviousSha`. Open an issue with the first run's failing lines, which contain no financial data.
 
 The `Docker smoke test` workflow (`.github/workflows/docker-smoke.yml`, called from `ci.yml` and needed by the `gate` job) runs on every pull request from this repository and every push to `main`, including Dependabot's, with no path filter. `scripts/docker-smoke.sh` builds the images and starts `db`, `app`, `backup` and `background` (after the one-shot `config-check`) from `compose.yml` with dummy values (a database password, `DJANGO_SECRET_KEY` and `FIELD_ENCRYPTION_KEY` generated for each run), a dummy `SIMPLEFIN_SYNC_CRON` and `BACKUP_CRON`, and throwaway volumes under the `fp-smoke` project. It requires `app` to report healthy and `/sign-in/` to return 200 (a redirect to first-run setup on an empty database). It then requires `backup` and `background` to stay `running` with `RestartCount` 0 for 90 seconds, checked every 5 seconds and once more when the time is up, and no Python traceback in any container's logs in that window. It builds only `app backup background`, as the upgrade does, and requires the `config-check` container to have run `background`'s image and revision. It runs the manual backup command above and restores the dump with `verify-restore.sh`. Finally it runs `docker compose up -d` on the whole stack with `SIMPLEFIN_SYNC_CRON` set to `30 6 * * MON-FRI` and then `60 6 * * *`, watches `background` under its normal `restart: unless-stopped` policy, then waits for the `app` container that `up` left to report healthy, reads `/health/` and reads `backup`'s state. It starts and creates nothing after that `up`, so it cannot repair what the `up` left. It records each case and judges them with `tests/docker_smoke_invalid_cron.py`, run with pytest in a one-off `python:3.15-slim` container that installs the hashed `requirements-test.lock` (the production image carries no test tools, #758): `up` must exit non-zero naming `config-check`; `docker compose logs config-check` must hold the error itself (for example `ValueError: SIMPLEFIN_SYNC_CRON has a minute outside 0-59`), not only a traceback's source lines naming the variable; `background` must never run and never restart; `backup` must still be `running` with `RestartCount` 0; and `app` must be healthy, not stopped or absent, with `/health/` starting `ok` and naming `SIMPLEFIN_SYNC_CRON` (#560). It never touches the tower and refuses to run as the `financial-planner` compose project. It passes docker only `PATH`, `HOME` and the `DOCKER_*` connection settings, so an exported `POSTGRES_VOLUME_NAME`, `RECEIPTS_VOLUME_NAME`, `BACKUP_DIR`, `OFFSITE_*` or `COMPOSE_FILE` cannot reach it, names `compose.yml` explicitly so no override file applies, and stops before building or starting anything (and so before any `down --volumes`) unless `docker compose config` resolves every named volume into the smoke project and every writable bind mount into its temporary directory.
 
@@ -315,64 +338,9 @@ A PostgreSQL major-version change cannot use these steps. Follow [PostgreSQL 16 
 
 ### Deploy rehearsal
 
-The production entrypoint runs `migrate --noinput` at container start, so without a rehearsal a release's migrations first meet real rows in production (#391 crashed on exactly that path). The weekly restore check proves a dump restores but never migrates it. `ops/deploy-rehearsal.ps1` (#538) migrates last night's dump with the candidate release in a throwaway stack first. Run it with PowerShell 7 (`pwsh`) from the checkout on the tower, before the upgrade steps above, for every release that adds a migration:
+A release with new migrations still requires a passing rehearsal against a restored dump before deployment: the weekly restore check restores but does not migrate it. The stdlib Python rehearsal port is tracked in [#789](https://github.com/dflippojr/financial-planner/issues/789). Its Linux invocation and isolation procedure belong to that follow-up. Until it lands, arrange the rehearsal with the owner using the retained tooling; do not bypass this prerequisite or treat the post-deploy check as a rehearsal.
 
-```powershell
-git fetch origin
-git diff --stat HEAD origin/main -- finance/migrations   # any new file means: rehearse first
-./ops/deploy-rehearsal.ps1 -Candidate origin/main -ConfigPath $Config
-```
-
-`-Candidate` is any git revision in the checkout (a SHA, a tag or `origin/main`). The candidate's compose project never runs on the tower's own Docker daemon. The script starts a [daemon of its own](#the-isolated-daemon) for each run, and every docker and compose command for the candidate runs inside it. The script:
-
-1. checks out the candidate with `git archive` into a new temporary directory and builds its `app`, `backup` and `background` images under a throwaway Compose project, `fp-rehearsal-<random>` (or `-ProjectName fp-rehearsal-...`), with its own volumes, a free loopback port, a temporary `BACKUP_DIR` and dummy secrets. It reads only `BACKUP_DIR` from `$Config`. It refuses any project name without the `fp-rehearsal-` prefix, and so `financial-planner`, before it starts and again before `down --volumes`. Like the Docker smoke test, it gives docker only `PATH`, `HOME` and the `DOCKER_*` settings, and stops before building, and so before anything it would tear down, unless the candidate passes the [storage allowlist](#what-the-rehearsal-lets-a-candidate-mount). The temporary directory, the work directory below, gets a random name unrelated to the project name and is created exclusively, readable only by you, so it is never one another user created or planted links in. It records the work directory's device and inode when it creates it and empties or deletes nothing there if that changed, for example because the directory was swapped for a link; a work directory under a parent another account can write, without the sticky bit, is outside what it defends (on Windows `%TEMP%` is in your own profile);
-2. copies the newest nightly dump that has a signed manifest (`$BACKUP_DIR/nightly/financial_planner_*.dump` with `.sha256` and `.sha256.sig`, plus its receipts archive) and `$BACKUP_DIR/signing/backup-signing-key.pub` into the work directory, then restores it into the throwaway database with the candidate's `restore.sh`, which verifies the signature against that key. The nightly directory and files are root-only, so short containers of the same pinned image on the host's Docker list it and copy the chosen files, run as root with no network, the nightly directory and key mounted read-only (`--mount`, which fails rather than creating a missing path). `BACKUP_DIR` itself never reaches the isolated daemon. A `-DumpPath` file is copied in directly;
-3. counts every table's rows (`row-counts.sh`), starts the candidate `app`, which applies the pending migrations, waits up to `-MigrateTimeoutSeconds` (900) for it to report healthy, and counts again;
-4. starts the rest of the stack, takes one backup of the migrated database (with its restore check), then runs `reconcile_balances --json` and `ops/post-deploy-check.ps1` against the throwaway project;
-5. always tears down, on failure or Ctrl+C too: `down --volumes --remove-orphans` for the throwaway project and empties the backup tree, both in the isolated daemon, then removes the isolated daemon's container and data volume, which takes every image, volume and container of the run with them, confirms on the host's Docker that neither is left, and deletes the temporary directory. It removes only the container and volume this run created; a removal that fails, or a listing it cannot read, is a FAIL, never taken for "gone".
-
-#### The isolated daemon
-
-The owner chose on 2026-10-28 (#538) to run the rehearsal in a Docker daemon of its own, after six review rounds each found a new way for a candidate's compose file past the allowlist below (the last: a service in an inactive `profiles:` group, which `docker compose config` leaves out but `build` and `run backup` select by name). Each run starts `docker:29-dind-rootless`, pinned by digest in `$IsolatedImage`, as `fp-rehearsal-<random>-isolated` on the host's Docker:
-
-- **Rootless, not privileged.** dockerd runs as the image's uid 1000 inside a user namespace, so a container's root is uid 1000 on the host, the same account the operator runs the script as. The container is not `--privileged`. It gets the host's `rootlesskit` AppArmor profile (Ubuntu ships it) to create its user namespace, `/dev/net/tun` for slirp4netns, and an unconfined seccomp profile and `/proc` so it can mount `/proc` for its own containers. A `privileged: true` service cannot even start in it.
-- **One host directory.** Its only mounts are a new data volume, `fp-rehearsal-<random>-isolated-docker`, and the work directory at its own path, because compose sends bind sources as host paths. Production's containers, volumes, `BACKUP_DIR`, `$Config` and the host's Docker socket do not exist inside it. A candidate bind to anywhere else names a path in the isolated container's own filesystem, never the host's.
-- **The clients run inside it too.** The daemon's socket is `/home/rootless/docker.sock` in the isolated container's own filesystem, and every docker and compose command for the candidate runs there through `docker exec`. No host process connects to a socket path a candidate could replace with a link to the host's socket (review of 1884e63), and every file compose reads for the candidate, such as a build context or Dockerfile, resolves in a filesystem that holds nothing of the host's but the work directory. `post-deploy-check.ps1` and `prod_signals.py` get a `docker` first on `PATH`, written to a new directory outside the work directory, that runs each command the same way.
-- **Its own network.** The isolated container uses the host's network, so the app's `127.0.0.1` port reaches the host for the health check. Its containers sit behind slirp4netns with the host's loopback disabled. They can reach the internet, which builds need, and the LAN like any other client, but not services listening only on the host's `127.0.0.1`.
-- **The host's Docker** gets only the script's own commands: `info`, `compose ls` for the production status, listing, creating, starting and removing the isolated container and its volume, `docker exec` into it, and listing and copying a nightly dump. It never runs the candidate's compose project or builds its images. A container or volume that already has the isolated daemon's name, another rehearsal's under the same `-ProjectName` for example, refuses the run; it is neither reused nor removed.
-
-Requirements on the tower: run the script as uid 1000, the account the image's daemon runs as, because the work directory is readable only by its owner. The host needs `/etc/apparmor.d/rootlesskit` loaded, which Ubuntu 24.04 and later ship, and unprivileged user namespaces enabled. It must be able to pull the image and, inside it, the candidate's base images, since the isolated daemon starts empty each run. When the daemon cannot start or answer within two minutes, the rehearsal fails before it builds anything. The residual risk is the container boundary itself: code that escapes the user namespace inside the isolated container runs as uid 1000 in the host's network namespace with the work directory, which is a kernel bug, not a compose setting. To move to a newer image, pull it, put its digest in `$IsolatedImage`, and rehearse a known-good release with a synthetic dump first.
-
-#### What the rehearsal lets a candidate mount
-
-The isolated daemon above is what keeps a candidate away from production. The allowlist stays as a second line, and as a clear refusal for a compose file that asks for more than a rehearsal needs. It is not complete on its own: it judges the model `config` prints, which leaves out a service in an inactive profile.
-
-Rounds 1 to 5 of #582's review each found another way for a candidate's compose file to reach production storage or secrets, through `volumes_from`, then through an `env_file` or `dockerfile` path outside the work directory, and then through a `compose.yml` committed as a symlink to a compose file elsewhere on the host. So the check is an allowlist: anything it does not name stops the rehearsal before the build, and nothing is torn down. It runs on the candidate's own `compose.yml` and on what `docker compose config --no-env-resolution` resolves from it with the rehearsal's settings (`-f` names that file alone, so no override file or `COMPOSE_FILE` adds another). Without `--no-env-resolution`, compose would read each service's `env_file` from the host and fold it into `environment`, a key the check allows, so the `env_file` key would no longer be there to refuse. Compose before 5 (2.38 on the CI runners, for example) reads every `env_file` and drops the key even with `--no-env-resolution`, so the check also refuses `env_file` in the file's text, below, before `config` runs.
-
-- **Mounts.** Each service may mount only: a volume declared at the top level that is new and a plain `local` volume named `<project>-...` or `<project>_...`; a bind whose source, every symlink and junction followed, lies under the work directory, read-only or not (a read-only bind of the Docker socket still drives the daemon); and `tmpfs`. An `external` volume, another driver, any `driver_opts` (such as `type=none`, `o=bind`, `device=...`, which can put real storage behind a prefixed name), a volume that already exists under one of the generated names, an anonymous or undeclared volume, a bind whose path cannot be resolved, any other mount type (`npipe`, `image`, `cluster`) and any mount option beyond `bind.create_host_path`, `volume.nocopy`, `volume.subpath`, `tmpfs.size` and `tmpfs.mode` are refused.
-- **Refused service keys.** `volumes_from`, `devices`, `privileged`, `cap_add`, `userns_mode`, `extends` and `env_file` in any form (a string, a list, or the long form with `path` and `required`; compose reports all three as the long form); `pid`, `ipc` or `network_mode` set to `host` or `container:...`; and any `security_opt` other than `no-new-privileges`.
-- **Known keys.** Top level: `name`, `services`, `volumes`, `networks`. Per service: `build`, `command`, `cpus`, `depends_on`, `entrypoint`, `environment`, `expose`, `extra_hosts`, `healthcheck`, `image`, `init`, `ipc`, `mem_limit`, `mem_reservation`, `network_mode`, `networks`, `pid`, `ports`, `pull_policy`, `restart`, `security_opt`, `stop_grace_period`, `stop_signal`, `tmpfs`, `user`, `volumes`, `working_dir`. Any other key, such as `labels`, `secrets`, `configs` or an `x-` extension, is refused by name. A network must be named for the project, use the `bridge` driver and set no `ipam`, and a service may join only those, without attachment options. A `build` may set only `context`, `dockerfile` and `args`. The context and the Dockerfile it uses, `Dockerfile` when none is named, relative to the context unless absolute, must lie under the work directory with every symlink followed, since the builder reads that file before any container runs; a built image must be named `<project>-...`, so a build never retags a production image.
-- **The compose file itself.** `git archive` keeps a committed symlink, so before it reads `compose.yml` at all the check refuses it if it, or any directory between it and the extracted source, is a symbolic link, even one that points back into the tree, or if it is not a regular file under the extracted source. `-f` names that file and `--env-file` the rehearsal's own, so compose reads no other candidate file, such as a `.env`, before the build.
-- **Other compose files.** Compose resolves `include` and `extends` before it prints the model, so the check reads `compose.yml` itself and refuses it if it contains `include`, `extends` or `env_file` anywhere, in any case, or a `\` or `!`, the only ways YAML spells a key without its letters (`"\x69nclude"` or a `!!binary` key).
-
-Each refusal names the service or volume and the key, as in `FAIL rehearsal: storage outside the throwaway project: service backup volumes_from: inherits another container's mounts`. A release that needs a key outside the list adds it to the lists at the top of `ops/deploy-rehearsal.ps1` with a test in `tests/test_deploy_rehearsal.py`, after judging whether it can reach the host or another stack. The allowlist judges the compose configuration, not the candidate's code: the candidate's containers still run as root in the isolated daemon with the work directory mounted writable, and it is the release you are about to deploy.
-
-It prints one line per step and per table, then `PASS deploy rehearsal of <sha>: N tables compared, M migration(s) applied` and exits 0, or `FAIL ...: N problem(s); do not deploy` and exits 1. Output holds only table names, counts, states, exception types and SHAs, never a row, a log line or a secret; `restore.sh`, `migrate` and compose output is discarded. It also prints the production project's `docker compose ls` status on the host's Docker before and after, and fails if it changed. It never starts the host's Docker: when that is not reachable it fails.
-
-A row count may only change on purpose. A table the migrations create is `new`; `django_migrations`, `django_content_type` and `auth_permission` may grow. Any other change, more rows or fewer, and any dropped table fails unless you name the table in `-ExpectCountChange` because the release notes or `tests/test_migrate_populated.py` declare that change (for example #520 and #569 deleted alerts and chat). `reconcile_balances` fails the rehearsal when it finds more `mismatch` windows than `-KnownMismatchWindows` (default 0). If production already shows mismatches on Settings → Data, fix them first or pass that count. The rehearsal's secrets are dummies, so encrypted fields such as SimpleFIN tokens stay sealed, and the sync schedules, the Agent Harness, local chat and notices are off: the restored copy never syncs, calls out or sends anything. A migration that must decrypt a field therefore fails here even though it would pass in production. Say so in its PR and deploy it with a verified backup and the rollback steps above.
-
-On FAIL, do not deploy. A `migrate:` line means the app did not become healthy (it lists the exception types it logged), a `counts:` FAIL names the table, and the post-deploy lines are the check's own. Open an issue with the FAIL lines, which carry no financial data.
-
-To prove the script without real data, build a synthetic dump with the #532 fixture builder and pass it as `-DumpPath`, which is restored without a signed manifest. `0061_savings_goal_wishlist` is the newest state the builder can seed; migrating it to head deletes the alerts and chat that #520 and #569 remove, and its synthetic balances leave 51 mismatch windows:
-
-```bash
-pip install -r requirements-test.txt
-bash scripts/build-synthetic-dump.sh .tmp/synthetic.dump 0061_savings_goal_wishlist
-pwsh ./ops/deploy-rehearsal.ps1 -Candidate HEAD -DumpPath .tmp/synthetic.dump \
-  -ExpectCountChange finance_alert,finance_aiconversation,finance_aiconversationmessage -KnownMismatchWindows 51
-```
-
-`tests/test_deploy_rehearsal.py` covers the project-name guard, the isolated daemon (a candidate whose `backup` hides in an inactive profile with a writable bind outside the work directory runs through the whole script; no compose call may reach the host's Docker, and every one must run inside the isolated container), refusing a same-named daemon, teardown failures, the root helper for a root-only nightly directory, the storage allowlist (a whole-script run per refused key that must stop before any build, `up`, `run` or `down`; `env_file`, outside Dockerfile and symlinked `compose.yml` cases with synthetic outside files through the real, daemon-free `docker compose config`; and the checked-in `compose.yml` through the same), the count comparison, the output and the stops before Docker without a daemon; the rehearsal itself needs Docker.
+The existing rehearsal and runner scripts and their tests remain in the tree under the #613 decision. They are not the Linux installation instructions. Removal requires an owner-confirmed real deploy; runner-script removal is tracked in [#790](https://github.com/dflippojr/financial-planner/issues/790).
 
 ## PostgreSQL 16 to 18 upgrade
 
@@ -382,12 +350,12 @@ From 18, the `postgres` image keeps its data in a versioned subdirectory, so `co
 
 1. Record the starting point. Keep both files outside the checkout:
 
-   ```powershell
-   $Config = 'D:\financial-planner-config\production.env'
-   $Work = 'D:\financial-planner-config\pg18-upgrade'
-   New-Item -ItemType Directory -Force $Work
-   git rev-parse HEAD | Out-File -Encoding utf8 "$Work\revision-before.txt"
-   Select-String '^(POSTGRES|RECEIPTS)_VOLUME_NAME=' $Config | Out-File -Encoding utf8 "$Work\volumes-before.txt"
+   ```bash
+   Config='/path/to/financial-planner-config/production.env'
+   Work='/path/to/financial-planner-config/pg18-upgrade'
+   install -d -m 700 "$Work"
+   git rev-parse HEAD > "$Work/revision-before.txt"
+   sed -n -E '/^(POSTGRES|RECEIPTS)_VOLUME_NAME=/p' "$Config" > "$Work/volumes-before.txt"
    ```
 
    If `POSTGRES_VOLUME_NAME` or `RECEIPTS_VOLUME_NAME` is not set, the volume in use is the default from `compose.yml` (`financial-planner-postgres-data` or `financial-planner-receipts`).
@@ -396,43 +364,43 @@ From 18, the `postgres` image keeps its data in a versioned subdirectory, so `co
 
 3. Fetch the approved revision and build its images. Building does not change the running containers:
 
-   ```powershell
-   $env:GIT_SHA = git rev-parse HEAD
-   docker compose --env-file $Config build --pull app backup background
+   ```bash
+   export GIT_SHA="$(git rev-parse HEAD)"
+   docker compose --env-file "$Config" build --pull app backup background
    ```
 
 4. Stop the app and workers, leaving PostgreSQL 16 running. Then take the cut-over dump with the new backup image, and record row counts. `--no-deps` keeps compose from recreating `db` with the 18 image:
 
-   ```powershell
-   docker compose --env-file $Config stop app background backup
-   docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/backup.sh
-   docker compose --env-file $Config run --rm -T --no-deps backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-before.tsv"
-   docker compose --env-file $Config stop db
+   ```bash
+   docker compose --env-file "$Config" stop app background backup
+   docker compose --env-file "$Config" run --rm -T --no-deps backup /opt/financial-planner/backup.sh
+   docker compose --env-file "$Config" run --rm -T --no-deps backup /opt/financial-planner/row-counts.sh > "$Work/row-counts-before.tsv"
+   docker compose --env-file "$Config" stop db
    ```
 
    Note the `Backup completed: financial_planner_TIMESTAMP.dump` name as `$Dump`. `row-counts.sh` prints one line for each table: the table name and an exact row count, never row contents.
 
 5. In `production.env`, set `POSTGRES_VOLUME_NAME` to a new name such as `financial-planner-postgres18-YYYYMMDD`. Set `RECEIPTS_VOLUME_NAME` to a new name such as `financial-planner-receipts-pg18-YYYYMMDD`. The receipts move too, so the old receipts volume still matches the old database for rollback. Do not delete or reuse the old volumes.
 
-6. Start PostgreSQL 18 on the new volume, restore the dump, and compare row counts. `Compare-Object` should print nothing:
+6. Start PostgreSQL 18 on the new volume, restore the dump, and compare row counts. `diff` should print nothing and exit 0:
 
-   ```powershell
-   $Dump = 'financial_planner_YYYYMMDDTHHMMSSZ.dump'
-   docker compose --env-file $Config up -d db
-   docker compose --env-file $Config run --rm -T backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
-   docker compose --env-file $Config run --rm -T backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-after.tsv"
-   Compare-Object (Get-Content "$Work\row-counts-before.tsv") (Get-Content "$Work\row-counts-after.tsv")
+   ```bash
+   Dump='financial_planner_YYYYMMDDTHHMMSSZ.dump'
+   docker compose --env-file "$Config" up -d db
+   docker compose --env-file "$Config" run --rm -T backup /opt/financial-planner/restore.sh "/backups/nightly/$Dump"
+   docker compose --env-file "$Config" run --rm -T backup /opt/financial-planner/row-counts.sh > "$Work/row-counts-after.tsv"
+   diff -u "$Work/row-counts-before.tsv" "$Work/row-counts-after.tsv"
    ```
 
    If the counts differ, stop here and roll back. Do not start the app.
 
 7. Start everything, then check health:
 
-   ```powershell
-   docker compose --env-file $Config up -d
-   docker compose --env-file $Config ps
-   docker compose --env-file $Config exec db psql -U financial_planner -d financial_planner -tAc "select version()"
-   Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+   ```bash
+   docker compose --env-file "$Config" up -d
+   docker compose --env-file "$Config" ps
+   docker compose --env-file "$Config" exec db psql -U financial_planner -d financial_planner -tAc "select version()"
+   curl --fail --silent --show-error https://BASEMENT-PC.MAGICDNS-NAME/health/
    ```
 
    `ps` should show `db` on `postgres:18-alpine`, with `app` and `db` healthy. If you changed `POSTGRES_USER` or `POSTGRES_DB`, use those values with `psql`. Sign in and spot-check recent transactions and a receipt. Run one manual backup on 18 (see [Backups](#backups)).
@@ -443,24 +411,24 @@ From 18, the `postgres` image keeps its data in a versioned subdirectory, so `co
 
 Rollback points the stack back at the old volumes and runs the 16 image on them through the `ops/postgres16-rollback.yml` override. Anything written after the cut-over is not carried back. The app and backup images stay on the new revision; the 18 `pg_dump` still backs up a 16 server.
 
-1. Stop everything: `docker compose --env-file $Config stop`.
-2. In `production.env`, set `POSTGRES_VOLUME_NAME` and `RECEIPTS_VOLUME_NAME` back to the values in `$Work\volumes-before.txt`. If they were not set before, remove them again.
+1. Stop everything: `docker compose --env-file "$Config" stop`.
+2. In `production.env`, set `POSTGRES_VOLUME_NAME` and `RECEIPTS_VOLUME_NAME` back to the values in `$Work/volumes-before.txt`. If they were not set before, remove them again.
 3. Start with the override, then verify:
 
-   ```powershell
-   $Rollback = @('--env-file', $Config, '-f', 'compose.yml', '-f', 'ops/postgres16-rollback.yml')
-   docker compose @Rollback up -d
-   docker compose @Rollback ps
-   docker compose @Rollback run --rm -T backup /opt/financial-planner/row-counts.sh | Out-File -Encoding utf8 "$Work\row-counts-rollback.tsv"
-   Compare-Object (Get-Content "$Work\row-counts-before.tsv") (Get-Content "$Work\row-counts-rollback.tsv")
-   Invoke-WebRequest https://BASEMENT-PC.MAGICDNS-NAME/health/
+   ```bash
+   Rollback=(--env-file "$Config" -f compose.yml -f ops/postgres16-rollback.yml)
+   docker compose "${Rollback[@]}" up -d
+   docker compose "${Rollback[@]}" ps
+   docker compose "${Rollback[@]}" run --rm -T backup /opt/financial-planner/row-counts.sh > "$Work/row-counts-rollback.tsv"
+   diff -u "$Work/row-counts-before.tsv" "$Work/row-counts-rollback.tsv"
+   curl --fail --silent --show-error https://BASEMENT-PC.MAGICDNS-NAME/health/
    ```
 
 While rolled back, pass both `-f` files on every compose command. A command without the override tries the 18 image on the 16 volume, which only restart-loops. That failed start leaves an empty `18` directory in the old volume, which PostgreSQL 16 ignores. To go back to the full revision that ran before the upgrade instead, check out the commit in `revision-before.txt`, rebuild the images, and run `up -d` without the override.
 
 ## Stack memory measurement (#249, 2026-10-06)
 
-Measured on Docker Desktop 29.8.1 using the same `docker stats --no-stream`
+Historical measurement with Docker version 29.8.1 (before the Linux-only host decision) using the same `docker stats --no-stream`
 and `docker top <container> -o pid,rss,args` method as the issue. The baseline
 was main at `d74bb50` (after #252 and #253); the updated image preloads Gunicorn
 and runs one background process. Both used PostgreSQL 18 and two gthread workers with four
@@ -534,15 +502,15 @@ Dependabot opens version and security update PRs. There is no auto-merge; the ow
 On the PR branch:
 
 1. Run the SQLite suite (`python -m pytest tests -q`) and `bash scripts/test_postgres.sh` (the `PostgreSQL 18` workflow runs the same on the PR).
-2. After merge, rebuild and deploy with the upgrade steps above (backup first, then `docker compose --env-file $Config build --pull` with `GIT_SHA` set and `up -d`, then the post-deploy check).
+2. After merge, rebuild and deploy with the upgrade steps above (backup first, then `docker compose --env-file "$Config" build --pull` with `GIT_SHA` set and `up -d`, then the post-deploy check).
 
 ## Synthetic restore exercise record
 
-On 2026-09-27, this procedure was exercised locally with Docker Desktop 29.8.0, PostgreSQL 16, and only the committed `synthetic_demo` fixture. The app and database health checks passed; the fixture contained 3 synthetic transactions; a custom-format dump produced both nightly and forced weekly copies; the transactions were deleted (count 0); and `pg_restore` recovered the count to 3. The same dump was then restored into a second, fresh named volume, where the count was 3 and `/health/` returned HTTP 200. No real statement, credential, account number, or financial record was used or written to Git.
+On 2026-09-27, this procedure was exercised locally with Docker version 29.8.0, PostgreSQL 16, and only the committed `synthetic_demo` fixture. The app and database health checks passed; the fixture contained 3 synthetic transactions; a custom-format dump produced both nightly and forced weekly copies; the transactions were deleted (count 0); and `pg_restore` recovered the count to 3. The same dump was then restored into a second, fresh named volume, where the count was 3 and `/health/` returned HTTP 200. No real statement, credential, account number, or financial record was used or written to Git.
 
 ## PostgreSQL 16 to 18 upgrade drill record
 
-On 2026-10-04, the upgrade and rollback runbook was exercised on the basement PC with Docker Desktop 29.8.1. It ran in an isolated compose project (`-p fp-drill`) with its own volume names, loopback port, and scratch backup directory, so the production project and volumes were not touched. Only the committed `synthetic_demo` fixture and one invented receipt file were used.
+On 2026-10-04, the upgrade and rollback runbook was exercised on the basement PC with Docker version 29.8.1. It ran in an isolated compose project (`-p fp-drill`) with its own volume names, loopback port, and scratch backup directory, so the production project and volumes were not touched. Only the committed `synthetic_demo` fixture and one invented receipt file were used.
 
 - **Baseline:** the pre-change revision ran on PostgreSQL 16.15, held 3 synthetic transactions, and returned HTTP 200 from `/health/`.
 - **Cut-over:** with the app and workers stopped, the new 18 backup image dumped the 16 server under `run --no-deps`, and the running 16 container was left in place. `row-counts.sh` recorded 66 tables.
@@ -636,10 +604,10 @@ Each scheduled SimpleFIN sync is followed by a balance reconciliation in the `ba
 
 After a CSV import, or to check by hand, run it in the app environment:
 
-```powershell
-docker compose --env-file $Config exec -T app python manage.py reconcile_balances
-docker compose --env-file $Config exec -T app python manage.py reconcile_balances --account 12 --since 2026-09-01
-docker compose --env-file $Config exec -T app python manage.py reconcile_balances --json
+```bash
+docker compose --env-file "$Config" exec -T app python manage.py reconcile_balances
+docker compose --env-file "$Config" exec -T app python manage.py reconcile_balances --account 12 --since 2026-09-01
+docker compose --env-file "$Config" exec -T app python manage.py reconcile_balances --json
 ```
 
 It is read-only: it raises no alert and does not update the last-run time. It prints account IDs, dates and window states, never amounts or account names, and exits 1 when any period is a `mismatch`. States are `ok`, `ok-late` (the next period undoes the difference exactly, which is pending or posting-date skew), `mismatch`, and `insufficient` (some day in the period has no active import, so the transactions cannot be complete). `--json` prints one object: `version`, `accounts`, `counts` per state, and `windows`, each with `account`, `start` (exclusive), `end` and `state`. Fix a mismatch in the app, for example by undoing a duplicated import; the command never changes data.
@@ -656,8 +624,8 @@ Once a month, after the new statements are imported, bring every account under t
 
 Export the sheet's month totals to a CSV and keep it outside this repository. `compare_ledger` reads it, compares each ended month's income and spending in your cash-flow accounts with it exactly to the cent, and stores nothing. Pipe the file in so it never lands in the container:
 
-```powershell
-Get-Content -Raw C:\Users\you\Documents\month-totals.csv | docker compose --env-file $Config exec -T app python manage.py compare_ledger --sheet - --username you
+```bash
+docker compose --env-file "$Config" exec -T app python manage.py compare_ledger --sheet - --username you < /path/to/private/month-totals.csv
 ```
 
 Output is a month label and a state per month plus counts, never an amount, a description or an account name, so it is safe to paste:
@@ -688,7 +656,7 @@ When,In,Out
 2026-02,1100.00,-500.00
 ```
 
-```powershell
+```bash
 ... compare_ledger --sheet - --username you --month-column When --income-column In --spending-column Out --spending-sign signed
 ```
 
