@@ -423,6 +423,7 @@ check when the SonarCloud quality gate fails (including 80% coverage on new code
 | [Backlog](docs/backlog.md) | Milestones and issue roadmap |
 | [Account connections research](docs/research/account-connections.md) | SimpleFIN, Plaid, and alternatives |
 | [Sign in with ChatGPT research](docs/research/sign-in-with-chatgpt.md) | Per-member ChatGPT plan as an AI backend (#92) |
+| [Timestral licence research](docs/research/timestral-licence.md) | Licence terms of Mistral's Timestral forecasting code and weights (#795) |
 | [Agent guide](AGENTS.md) | Rules for AI agents working in this repository |
 
 ## License and security
