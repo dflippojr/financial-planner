@@ -111,7 +111,9 @@ def test_import_commit_no_new_rows_and_undo_identify_each_member():
     undo_import_batch(member, shared.pk, result.batch.pk)
     undone = only(A.IMPORT_UNDONE)
     assert undone.actor_id == member.pk != committed.actor_id
-    assert undone.metadata["row_count"] == 1
+    # The exact reimport skipped the row as a duplicate, so undo hands it to that batch (#796).
+    assert (undone.metadata["row_count"], undone.metadata["rehomed_count"]) == (0, 1)
+    assert Transaction.objects.get(account=shared, status="active").import_batch_id == again.batch.pk
     assert AuditEvent.objects.count() == 3
     # A denied undo and a second undo of the same batch write nothing.
     with pytest.raises(PermissionDenied):

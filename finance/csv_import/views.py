@@ -269,13 +269,39 @@ def _prefill_date_range(post_data, preview):
     return data
 
 
-def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invalid_count=0, undone=False):
+UNCOVERED_DAY_LIMIT = 10
+
+
+def _hole_warning(hole):
+    """What the undo message says about one batch left covering removed rows (#796)."""
+    days = [day.isoformat() for day in hole.days]
+    more = len(days) - UNCOVERED_DAY_LIMIT
+    named = days[:UNCOVERED_DAY_LIMIT]
+    if more > 0:
+        listed = f"{', '.join(named)} and {more} more day{'s' if more != 1 else ''}"
+    elif len(named) > 1:
+        listed = f"{', '.join(named[:-1])} and {named[-1]}"
+    else:
+        listed = named[0]
+    one = hole.row_count == 1
+    batch = hole.batch
+    return (
+        f"{hole.row_count} removed row{'' if one else 's'} dated {listed} {'is' if one else 'are'} still marked "
+        f"as covered by the {batch.get_source_display()} import for {batch.date_range_start.isoformat()} to "
+        f"{batch.date_range_end.isoformat()}. Import that file again to restore {'it' if one else 'them'}."
+    )
+
+
+def _store_result(request, account_id, *, new_count=0, duplicate_count=0, invalid_count=0, undone=False,
+                  rehomed_count=0, hole_warnings=()):
     request.session[RESULT_SESSION_KEY] = {
         "account_id": account_id,
         "new_count": new_count,
         "duplicate_count": duplicate_count,
         "invalid_count": invalid_count,
         "undone": undone,
+        "rehomed_count": rehomed_count,
+        "hole_warnings": list(hole_warnings),
     }
 
 
@@ -605,8 +631,9 @@ def csv_preview(request, account_id):
 def csv_undo_import(request, account_id, batch_id):
     account = _visible_account(request, account_id)
     try:
-        undo_import_batch(request.user, account.pk, batch_id)
+        result = undo_import_batch(request.user, account.pk, batch_id)
     except PermissionDenied as exc:
         raise Http404 from exc
-    _store_result(request, account.pk, undone=True)
+    _store_result(request, account.pk, undone=True, rehomed_count=result.rehomed_count,
+                  hole_warnings=[_hole_warning(hole) for hole in result.holes])
     return redirect("csv-import-preview", account_id=account.pk)

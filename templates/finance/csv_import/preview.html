@@ -7,12 +7,16 @@
 <div role="status" class="alert {% if import_result.undone %}alert-info{% else %}alert-success{% endif %} mb-4">
   {% if import_result.undone %}
   The selected import was undone. Earlier imports were left in place.
+  {% if import_result.rehomed_count %}{{ import_result.rehomed_count }} row{{ import_result.rehomed_count|pluralize }} stayed because another active import also contains {{ import_result.rehomed_count|pluralize:"it,them" }}.{% endif %}
   {% else %}
   Import finished: <strong>{{ import_result.new_count }}</strong> new,
   <strong>{{ import_result.duplicate_count }}</strong> duplicate,
   <strong>{{ import_result.invalid_count }}</strong> invalid.
   {% endif %}
 </div>
+{% for warning in import_result.hole_warnings %}
+<div role="alert" class="alert alert-warning mb-4">{{ warning }}</div>
+{% endfor %}
 {% endif %}
 <p class="mb-4"><a class="link" href="{% url 'csv-mapping-list' %}">Saved CSV mappings</a></p>
 {% if mapping_saved %}
