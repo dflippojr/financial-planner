@@ -635,3 +635,67 @@ def test_a_deletion_whose_accounts_never_settle_fails_loudly_and_changes_nothing
 
     assert Person.objects.filter(pk=leaver.pk).exists()
     assert Account.objects.filter(pk=private.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grid_a_pair_committed_after_the_exits_lookup_restarts_the_deletion():
+    """Review r3 on #811: the exit's pair revalidation must not lock an account outside the first pass.
+
+    The leaver is still a member. After the first pass, and after the exit read
+    the pair counterparts of the household's transactions, a pair from a
+    household transaction to the member's private account R commits. R is
+    then reached only by revalidate_pairs_for_leg_ids in transfer_pairing.
+    """
+    from finance.models import TransferPair
+
+    _require_postgres()
+    leaver = make_person("leaver")
+    member = make_person("member")
+    household = make_household(leaver, member)
+    member_private = make_account(member, name="Member Private")
+    shared = make_account(member, name="Member Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    make_account(leaver, name="Leaver Checking")
+    out_leg = make_transaction(member, shared, transaction_date=AUGUST, amount_minor=-3_000,
+                               description="SYNTHETIC TRANSFER OUT")
+    in_leg = make_transaction(member, member_private, transaction_date=AUGUST, amount_minor=3_000,
+                              description="SYNTHETIC TRANSFER IN")
+    attempts = []
+    after_first_pass = []
+    once = lifecycle_services._delete_member_data_once
+    handover = lifecycle_services._handover_lent_accounts
+    counterparts = lifecycle_services._pair_counterpart_account_ids
+    lock = lifecycle_services._lock_accounts_in_pk_order
+
+    def record_attempt(*args, **kwargs):
+        attempts.append([])
+        return once(*args, **kwargs)
+
+    def record_lock(account_ids):
+        attempts[-1].append(set(account_ids))
+        return lock(account_ids)
+
+    def mark_first_pass(*args, **kwargs):
+        after_first_pass.append(True)
+        return handover(*args, **kwargs)
+
+    def pair_after_the_exits_lookup(*args, **kwargs):
+        result = counterparts(*args, **kwargs)
+        if after_first_pass and not TransferPair.objects.exists():
+            _in_another_transaction(lambda: TransferPair.objects.create(
+                leg_a=out_leg, leg_b=in_leg, status="confirmed", kind="transfer", confidence="high", reasons=[],
+            ))
+        return result
+
+    with (
+        patch.object(lifecycle_services, "_delete_member_data_once", record_attempt),
+        patch.object(lifecycle_services, "_lock_accounts_in_pk_order", record_lock),
+        patch.object(lifecycle_services, "_handover_lent_accounts", mark_first_pass),
+        patch.object(lifecycle_services, "_pair_counterpart_account_ids", pair_after_the_exits_lookup),
+    ):
+        delete_member_data(leaver)
+
+    assert len(attempts) >= 2, f"the deletion did not start again: {attempts}"
+    assert member_private.pk in attempts[-1][0]
+    assert member_private.pk not in attempts[0][0]
+    assert not Person.objects.filter(pk=leaver.pk).exists()
+    assert TransferPair.objects.filter(leg_a=out_leg).exists()
