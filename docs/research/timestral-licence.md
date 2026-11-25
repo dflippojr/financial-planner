@@ -72,14 +72,57 @@ The grant itself ("to deal in the Model without restriction, including without l
 - **"This restriction in (b)".** The conditions are numbered 1 and 2; there is no "(b)". The only restriction in the text is condition 2, so it is the likely referent, but the cross-reference is literally broken.
 - **"combined works based on it".** The restriction follows the Model into "any derivatives, modifications, or combined works based on it, whether provided by Mistral AI or by a third party". The licence does not define "combined works". If the planner with Timestral wired in counts as a combined work, the revenue cap reaches everyone who runs the planner with the model, not only the person who downloaded it.
 
-## Code licence (Apache-2.0)
+## Code licence (Apache-2.0), verbatim where it differs from MIT
 
-The code LICENSE is the unmodified Apache License 2.0, so it has no clauses that differ from a standard licence. The parts that matter here:
+The code LICENSE is the unmodified Apache License 2.0, not a variant of MIT. Measured against the MIT baseline [MIT], every operative section of Apache-2.0 differs: it defines its terms, splits the grant into copyright and patent licences, ends the patent licence on patent litigation, sets four redistribution conditions instead of MIT's single notice condition, covers contributions and trademarks, and words its disclaimers and support terms differently. So every section from §1's definition of Derivative Works through §9 is quoted below exactly as fetched from [CODE]. The remaining §1 definitions ("License", "Licensor", "Legal Entity", "You", "Source", "Object", "Work", "Contribution", "Contributor") only name the parties and forms these sections use. The appendix is a how-to note, not a term.
 
-- §2 grants a copyright licence to "reproduce, prepare Derivative Works of, publicly display, publicly perform, sublicense, and distribute the Work". §3 grants a patent licence.
-- §1: "Derivative Works shall not include works that remain separable from, or merely link (or bind by name) to the interfaces of, the Work". Importing the package does not make the planner a Derivative Work.
-- §4 sets conditions only on redistribution: "(a) You must give any other recipients of the Work or Derivative Works a copy of this License", (b) mark modified files, (c) keep notices, (d) pass on a NOTICE file. There is no NOTICE file, so (d) does not apply today.
-- Apache-2.0 has no copyleft and no revenue or field-of-use limit. An MIT-licensed project may depend on it.
+<details>
+<summary>Apache License 2.0, &sect;1 (Derivative Works) and &sect;&sect;2&ndash;9, verbatim</summary>
+
+> "Derivative Works" shall mean any work, whether in Source or Object form, that is based on (or derived from) the Work and for which the editorial revisions, annotations, elaborations, or other modifications represent, as a whole, an original work of authorship. For the purposes of this License, Derivative Works shall not include works that remain separable from, or merely link (or bind by name) to the interfaces of, the Work and Derivative Works thereof.
+
+> 2. Grant of Copyright License. Subject to the terms and conditions of this License, each Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare Derivative Works of, publicly display, publicly perform, sublicense, and distribute the Work and such Derivative Works in Source or Object form.
+
+> 3. Grant of Patent License. Subject to the terms and conditions of this License, each Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable (except as stated in this section) patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the Work, where such license applies only to those patent claims licensable by such Contributor that are necessarily infringed by their Contribution(s) alone or by combination of their Contribution(s) with the Work to which such Contribution(s) was submitted. If You institute patent litigation against any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Work or a Contribution incorporated within the Work constitutes direct or contributory patent infringement, then any patent licenses granted to You under this License for that Work shall terminate as of the date such litigation is filed.
+
+> 4. Redistribution. You may reproduce and distribute copies of the Work or Derivative Works thereof in any medium, with or without modifications, and in Source or Object form, provided that You meet the following conditions:
+>
+> (a) You must give any other recipients of the Work or Derivative Works a copy of this License; and
+>
+> (b) You must cause any modified files to carry prominent notices stating that You changed the files; and
+>
+> (c) You must retain, in the Source form of any Derivative Works that You distribute, all copyright, patent, trademark, and attribution notices from the Source form of the Work, excluding those notices that do not pertain to any part of the Derivative Works; and
+>
+> (d) If the Work includes a "NOTICE" text file as part of its distribution, then any Derivative Works that You distribute must include a readable copy of the attribution notices contained within such NOTICE file, excluding those notices that do not pertain to any part of the Derivative Works, in at least one of the following places: within a NOTICE text file distributed as part of the Derivative Works; within the Source form or documentation, if provided along with the Derivative Works; or, within a display generated by the Derivative Works, if and wherever such third-party notices normally appear. The contents of the NOTICE file are for informational purposes only and do not modify the License. You may add Your own attribution notices within Derivative Works that You distribute, alongside or as an addendum to the NOTICE text from the Work, provided that such additional attribution notices cannot be construed as modifying the License.
+>
+> You may add Your own copyright statement to Your modifications and may provide additional or different license terms and conditions for use, reproduction, or distribution of Your modifications, or for any such Derivative Works as a whole, provided Your use, reproduction, and distribution of the Work otherwise complies with the conditions stated in this License.
+
+> 5. Submission of Contributions. Unless You explicitly state otherwise, any Contribution intentionally submitted for inclusion in the Work by You to the Licensor shall be under the terms and conditions of this License, without any additional terms or conditions. Notwithstanding the above, nothing herein shall supersede or modify the terms of any separate license agreement you may have executed with Licensor regarding such Contributions.
+
+> 6. Trademarks. This License does not grant permission to use the trade names, trademarks, service marks, or product names of the Licensor, except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the NOTICE file.
+
+> 7. Disclaimer of Warranty. Unless required by applicable law or agreed to in writing, Licensor provides the Work (and each Contributor provides its Contributions) on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied, including, without limitation, any warranties or conditions of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE. You are solely responsible for determining the appropriateness of using or redistributing the Work and assume any risks associated with Your exercise of permissions under this License.
+
+> 8. Limitation of Liability. In no event and under no legal theory, whether in tort (including negligence), contract, or otherwise, unless required by applicable law (such as deliberate and grossly negligent acts) or agreed to in writing, shall any Contributor be liable to You for damages, including any direct, indirect, special, incidental, or consequential damages of any character arising as a result of this License or out of the use or inability to use the Work (including but not limited to damages for loss of goodwill, work stoppage, computer failure or malfunction, or any and all other commercial damages or losses), even if such Contributor has been advised of the possibility of such damages.
+
+> 9. Accepting Warranty or Additional Liability. While redistributing the Work or Derivative Works thereof, You may choose to offer, and charge a fee for, acceptance of support, warranty, indemnity, or other liability obligations and/or rights consistent with this License. However, in accepting such obligations, You may act only on Your own behalf and on Your sole responsibility, not on behalf of any other Contributor, and only if You agree to indemnify, defend, and hold each Contributor harmless for any liability incurred by, or claims asserted against, such Contributor by reason of your accepting any such warranty or additional liability.
+
+</details>
+
+What these clauses mean for this repository:
+
+| # | Clause | Effect here |
+|---|---|---|
+| A1 | §1 Derivative Works excludes works that "merely link (or bind by name) to the interfaces of, the Work" | Importing `timestral` does not make the planner a Derivative Work. |
+| A2 | §2 copyright grant ("reproduce, prepare Derivative Works of, publicly display, publicly perform, sublicense, and distribute") | The MIT grant's counterpart; covers use as a dependency. |
+| A3 | §3 patent grant, which terminates "as of the date such litigation is filed" if You sue over patents in the Work | Not in MIT. Matters only if the owner ever brought such a suit. |
+| A4 | §4 (a)–(d) redistribution conditions | Apply only when the code is redistributed. There is no NOTICE file at the commit read, so (d) does not apply today. |
+| A5 | §5 contributions are under the same licence | Matters only if someone upstreams a change to Mistral. |
+| A6 | §6 no trademark grant beyond "reasonable and customary use in describing the origin of the Work" | Do not use "Mistral" or "Timestral" names beyond describing the dependency. |
+| A7 | §7–§8 disclaimer and limitation of liability | The MIT disclaimer's counterpart, worded differently. |
+| A8 | §9 You may offer warranty or support only on Your own behalf | Not relevant to a household app. |
+
+Apache-2.0 has no copyleft and no revenue or field-of-use limit. An MIT-licensed project may depend on it.
 
 The loader at the commit read (`src/timestral/loading.py`, `resolve_checkpoint`) downloads only two files from the Hub: `snapshot_download(..., allow_patterns=[CONFIG_FILE, WEIGHTS_FILE])` with `config.json` and `model.safetensors`. **The weights' LICENSE file is not downloaded next to the runtime copy.**
 
@@ -97,11 +140,14 @@ The loader at the commit read (`src/timestral/loading.py`, `resolve_checkpoint`)
 - Condition 1: the attribution notice and the permission notice (in practice the whole LICENSE file) go with every copy.
 - Condition 2 binds the distributor, and "combined works based on it" carries it to the image or artifact. Every recipient whose company or employer is over the cap still may not use it.
 
-Because the runtime download already works, redistribution is not needed for the spike, and keeping weights out of the repository, images and release artifacts avoids both conditions.
+Redistribution is not needed for the spike, because the runtime download already works. Keeping weights out of the repository, images and release artifacts avoids redistributing them, but it does **not** avoid either condition. Condition 1 covers "all copies", which includes the runtime copy in the Hugging Face cache (see question 3). Condition 2 covers exercising "any rights under this license", and using the weights at all is such a right.
 
 ### 3. What attribution or notice is required, and where would it go?
 
-- **Weights:** "Attribution notice: 2026 - Mistral AI" plus the permission notice, "included in all copies or substantial portions of the Model" (condition 1). A runtime download for local use is not a redistribution. If weights are ever shipped, put the full weights LICENSE file next to `model.safetensors` in the image or artifact. The loader does not fetch it, so it must be added on purpose. The licence says nothing about forecasts the model produces; condition 1 names copies of the Model, not its outputs.
+- **Weights:** "Attribution notice: 2026 - Mistral AI" plus the permission notice, "included in all copies or substantial portions of the Model" (condition 1). Condition 1 does not distinguish redistributed copies from local ones, so read it as covering **every** copy, including the runtime copy the loader writes to the Hugging Face cache. The loader fetches only `config.json` and `model.safetensors`, so that copy lacks its LICENSE unless the integration also fetches it. Where it goes:
+  - Runtime copy: fetch the repository's `LICENSE` into the same snapshot as the weights (for example by adding `LICENSE` to the download's allowed files, or a separate download of that file at the same revision), and refuse to load weights whose snapshot lacks it.
+  - Any redistributed copy (image, release artifact): ship the full weights LICENSE file next to `model.safetensors`.
+  - The licence says nothing about forecasts the model produces. Condition 1 names copies of the Model, not its outputs.
 - **Code:** nothing while it is only a declared dependency. If the `timestral` package is bundled (for example installed in a published image), Apache §4(a) requires a copy of the Apache License to go with it. `pyproject.toml` lists `license-files = ["LICENSE"]`, so a built wheel should carry it, but this page did not build or inspect one.
 - **Where in this repository:** when the spike becomes product code, a third-party notices entry (for example a "Third-party models" section in the README or a `THIRD_PARTY_NOTICES` file) naming Timestral, Apache-2.0 for the code, Modified MIT for the weights, and the revenue restriction. That way people who run this public repository learn of condition 2 before they enable the model. No such file is added in this issue.
 
@@ -114,4 +160,4 @@ Because the runtime download already works, redistribution is not needed for the
 
 ## Verdict
 
-**Unclear:** fine with conditions (weights fetched at runtime and never committed or bundled; the weights LICENSE shipped next to any copy that is ever redistributed; the Apache LICENSE with any bundled code; a notice of the revenue restriction for people who run this repository) only if condition 2 is satisfied. The owner must confirm that neither the owner's own company nor the owner's employer had global consolidated monthly revenue above $20 million in the preceding month, and decide whether to accept the broken "(b)" reference and the reach of "combined works" or ask Mistral AI (sales@mistral.ai) for clarification before the spike in #765 runs.
+**Unclear:** fine with conditions (weights fetched at runtime and never committed or bundled; the weights LICENSE kept next to every copy, the runtime cache included; the Apache LICENSE with any bundled code; a notice of the revenue restriction for people who run this repository) only if condition 2 is satisfied. The owner must confirm that neither the owner's own company nor the owner's employer had global consolidated monthly revenue above $20 million in the preceding month, and decide whether to accept the broken "(b)" reference and the reach of "combined works" or ask Mistral AI (sales@mistral.ai) for clarification before the spike in #765 runs.
