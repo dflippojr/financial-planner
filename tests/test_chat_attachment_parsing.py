@@ -680,3 +680,25 @@ def test_the_parse_budget_stops_inside_a_part_and_counts_blank_rows(monkeypatch)
         parse_upload(upload("blank.xlsx", data))
     assert str(caught.value).startswith("That workbook is too large to read.")
     assert len(seen) < 100
+
+
+def test_every_parsed_workbook_part_is_charged_to_the_parse_budget(monkeypatch):
+    # The worksheet alone is five elements; the shared strings and styles are what push it over.
+    sheet = rows_xml([[1]])
+    plain = make_xlsx([("S", sheet)])
+    strings = make_xlsx([("S", sheet)], shared_strings="<si><t/></si>" * 20)
+    styles = make_xlsx([("S", sheet)], styles="<cellXfs>" + '<xf numFmtId="0"/>' * 20 + "</cellXfs>")
+    ignored = make_xlsx([("S", sheet)], styles="<fonts>" + "<font/>" * 20 + "</fonts>")
+    monkeypatch.setattr(parsing, "MAX_WORKBOOK_PARSE_ELEMENTS", 20)
+    assert _rows(parse_upload(upload("plain.xlsx", plain))) == [[1, ["1"]]]
+    for name, data in (("strings.xlsx", strings), ("styles.xlsx", styles), ("ignored.xlsx", ignored)):
+        _rejected(name, data, parsing.WORKBOOK_TOO_LARGE)
+    # The workbook part and its relationships count too, before any sheet is read.
+    many_rels = "".join(f'<Relationship Id="x{index}" Type="other" Target="other.xml"/>' for index in range(20))
+    rels = make_xlsx([("S", sheet)], extra_rels=many_rels)
+    _rejected("rels.xlsx", rels, parsing.WORKBOOK_TOO_LARGE)
+    sheets = []
+    real_read_sheet = parsing._read_sheet
+    monkeypatch.setattr(parsing, "_read_sheet", lambda *args: sheets.append(args) or real_read_sheet(*args))
+    _rejected("rels.xlsx", rels, parsing.WORKBOOK_TOO_LARGE)
+    assert sheets == []
