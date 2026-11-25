@@ -263,22 +263,28 @@ def restore_refund_links_for_pair(pair, actor):
             _record_member_link_history(links[link_id].refund, actor, person_id, "unlinked", "linked")
 
 
+def _marked_pairs_touching(transaction_ids):
+    marked = TransferPair.objects.excluding_income_and_spending()  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other excluding_income_and_spending calls in the baseline
+    return marked.filter(Q(leg_a_id__in=transaction_ids) | Q(leg_b_id__in=transaction_ids))
+
+
 def dropped_refund_links(original_ids):
     """The links of these originals, as `restore_dropped_refund_links` takes them back.
 
     Read under the originals' row locks, before the mark drops them (#797).
+    Each link keeps the marked pairs that touched its original or refund then,
+    so undo can tell a pair that came later from one that was already there.
     """
-    return list(
+    links = list(
         RefundLink.objects.filter(original_id__in=original_ids)
         .order_by("pk")
-        .values("refund_id", "original_part_id")
+        .values("refund_id", "original_part_id", "original_id")
     )
-
-
-def _marked_leg_ids(transaction_ids):
-    marked = TransferPair.objects.excluding_income_and_spending()  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other excluding_income_and_spending calls in the baseline
-    legs = marked.filter(Q(leg_a_id__in=transaction_ids) | Q(leg_b_id__in=transaction_ids))
-    return {leg for pair in legs.values_list("leg_a_id", "leg_b_id") for leg in pair}
+    for link in links:
+        original_id = link.pop("original_id")
+        touching = _marked_pairs_touching((original_id, link["refund_id"]))
+        link["marked_pair_ids"] = sorted(touching.values_list("pk", flat=True))
+    return links
 
 
 def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
@@ -286,21 +292,27 @@ def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
 
     Owner decision on #679: undoing a bulk untracked-transfer mark is a full
     undo. `saved_links` are the links the mark dropped, each with the refund's
-    `updated_at` read after the drop. A link comes back only when nothing has
-    moved since: the refund is still active, unlinked and unedited, a split part
-    still exists, and neither row is a leg of a marked transfer pair, which
-    `link_refund` would refuse or drop. Any other link is skipped, so the refund
-    keeps counting as income, and the undo goes on: a refusal would tell the
-    actor that a row they may not see has changed. The caller holds the row
-    locks of `original` and of every refund in `refunds_by_id`, and has already
-    unmarked `original`. Returns the number of links restored.
+    `updated_at` read after the drop and the marked pairs touching either row
+    then. A link comes back only when nothing has moved since: the refund is
+    still active, unlinked and unedited, a split part still exists, and no
+    marked pair touches either row that did not touch it at the mark. Any other
+    link is skipped, so the refund keeps counting as income, and the undo goes
+    on: a refusal would tell the actor that a row they may not see has changed.
+    A restored link whose original is a leg of a pair marked before the bulk
+    mark gets that pair's viewer rule again, as `link_refund` applies it, so
+    each viewer who saw it dropped before the mark sees it dropped again.
+    The caller holds the row locks of `original` and of every refund in
+    `refunds_by_id`, and has already unmarked `original`. Returns the number
+    of links restored.
     """
     if not saved_links:
         return 0
     refund_ids = [item["refund_id"] for item in saved_links]
     linked = set(RefundLink.objects.filter(refund_id__in=refund_ids).values_list("refund_id", flat=True))
-    marked_legs = _marked_leg_ids([original.pk, *refund_ids])
     part_ids = set(TransactionSplit.objects.filter(transaction=original).values_list("pk", flat=True))
+    original_pairs = list(
+        _marked_pairs_touching((original.pk,)).select_related("leg_a__account", "leg_b__account").order_by("pk")
+    )
     restored = 0
     for item in saved_links:
         refund = refunds_by_id.get(item["refund_id"])
@@ -311,11 +323,14 @@ def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
             or refund.updated_at.isoformat() != item["refund_updated_at"]
             or refund.pk in linked
             or (part_id is not None and part_id not in part_ids)
-            or {original.pk, refund.pk} & marked_legs
+            or set(_marked_pairs_touching((original.pk, refund.pk)).values_list("pk", flat=True))
+            - set(item.get("marked_pair_ids", []))
         ):
             continue
-        RefundLink.objects.create(refund=refund, original=original, original_part_id=part_id)
+        link = RefundLink.objects.create(refund=refund, original=original, original_part_id=part_id)
         record_text_history(refund, actor, TransactionCorrectionHistory.Field.REFUND_LINK, "unlinked", "linked")
+        for pair in original_pairs:
+            drop_refund_links_for_pair([link], pair, (pair.leg_a, pair.leg_b), actor)
         restored += 1
     if restored:
         restore_refund_categories(original, actor)

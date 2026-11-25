@@ -769,3 +769,28 @@ def test_rule_reversal_still_leaves_a_dropped_link_dropped(world):
     purchase.refresh_from_db()
     assert purchase.untracked_transfer is False
     assert not RefundLink.objects.filter(refund=refund).exists()
+
+
+def test_undo_restores_a_link_whose_purchase_was_already_a_marked_leg_for_another_member(world):
+    owner, member = world["owner"], world["member"]
+    purchase = world["txn"](world["shared"], -6_000, "SYNTHETIC ONLINE TRANSFER TO SAVINGS")
+    world["txn"](world["private"], 6_000, "SYNTHETIC ONLINE TRANSFER FROM CHECKING")
+    refresh_transfer_pairs(owner)
+    pair = TransferPair.objects.get(Q(leg_a=purchase) | Q(leg_b=purchase))
+    if pair.status == TransferPair.Status.SUGGESTED:
+        confirm_transfer_pair(owner, pair.pk)
+    # Only the owner sees both legs, so the pair leaves the purchase out for the owner alone.
+    refund = world["txn"](world["shared"], 1_500, "SYNTHETIC SAVINGS REFUND")
+    link_refund(member, refund.pk, purchase.pk)
+    link = RefundLink.objects.get(refund=refund)
+    assert list(link.drops.values_list("person_id", "pair_id")) == [(owner.pk, pair.pk)]
+    before = {person.pk: _totals(person) for person in (owner, member)}
+
+    undo = _bulk_mark(member, [purchase])
+    assert not RefundLink.objects.filter(refund=refund).exists()
+    undo_bulk_edit(member, undo.pk)
+
+    link = RefundLink.objects.get(refund=refund)
+    assert link.original_id == purchase.pk
+    assert list(link.drops.values_list("person_id", "pair_id")) == [(owner.pk, pair.pk)]
+    assert {person.pk: _totals(person) for person in (owner, member)} == before
