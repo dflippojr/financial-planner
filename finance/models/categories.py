@@ -3,7 +3,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.functions import Lower
 
-from .people import Household, Membership, person_for as _person_for
+from .people import Household, Membership, person_for
 
 
 class Category(models.Model):
@@ -20,7 +20,7 @@ class Category(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             current_households = Membership.objects.filter(
@@ -58,7 +58,7 @@ class Tag(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             current_households = Membership.objects.filter(

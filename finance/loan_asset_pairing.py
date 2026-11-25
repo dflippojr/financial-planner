@@ -3,11 +3,11 @@
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .access import visible_rows
 from .audit_services import append_event
-from .models import Account, AuditEvent, _person_for, loan_asset_pairing_allowed
-from .snapshot_services import _lock_editable_account
+from .models import Account, AuditEvent, person_for, loan_asset_pairing_allowed
+from .snapshot_services import lock_editable_account
 
 
 class PairingError(Exception):
@@ -16,10 +16,10 @@ class PairingError(Exception):
 
 @transaction.atomic
 def set_loan_secured_asset(principal, loan_id, asset_id):
-    account = _lock_editable_account(principal, loan_id)
+    account = lock_editable_account(principal, loan_id)
     if account.account_type != Account.Type.LOAN:
-        raise PermissionDenied(_DENIED)
-    person = _person_for(principal)
+        raise PermissionDenied(DENIED)
+    person = person_for(principal)
     if not asset_id:
         changed = account.secured_asset_id is not None
         account.secured_asset = None
@@ -34,7 +34,7 @@ def set_loan_secured_asset(principal, loan_id, asset_id):
         .first()
     )
     if asset is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if not loan_asset_pairing_allowed(account, asset):
         raise PairingError(Account.PAIRING_REJECTED)
     changed = account.secured_asset_id != asset.pk

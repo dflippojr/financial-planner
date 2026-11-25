@@ -3,8 +3,8 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .access import visible_rows
 from .audit_services import record
 from .households import current_household
@@ -63,7 +63,7 @@ def ensure_household_categories(household):
 
 
 def assignable_categories(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     household = current_household(person)
     if household is None:
         return Category.objects.none()
@@ -87,7 +87,7 @@ def apply_manual_category(person, txn, category):
 
 @transaction.atomic
 def assign_category(principal, transaction_id, category_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     financial_transaction = (
         visible_rows(Transaction, person)
         .filter(pk=transaction_id, status=Transaction.Status.ACTIVE)
@@ -95,14 +95,14 @@ def assign_category(principal, transaction_id, category_id):
         .first()
     )
     if financial_transaction is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if financial_transaction.category_source == Transaction.CategorySource.SPLIT:
         raise ValidationError(UNSPLIT_TO_CATEGORIZE)
     category = None
     if category_id:
         category = assignable_categories(person).filter(pk=category_id).first()
         if category is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     # Look up refunds under the household lock, which link_refund also takes first.
     lock_actor_household(person)
     linked_refunds = linked_refunds_for_originals(person, [financial_transaction])
@@ -110,7 +110,7 @@ def assign_category(principal, transaction_id, category_id):
     # Recheck after locking: the account may have been unshared between the
     # first visibility query and the locks.
     if not visible_rows(Transaction, person).filter(pk=financial_transaction.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
     apply_manual_category(person, financial_transaction, category)
@@ -124,10 +124,10 @@ def assign_category(principal, transaction_id, category_id):
 
 @transaction.atomic
 def add_category(principal, name):
-    person = _person_for(principal)
+    person = require_person(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     ensure_household_categories(household)
     cleaned = name.strip()
@@ -143,14 +143,14 @@ def add_category(principal, name):
 
 @transaction.atomic
 def rename_category(principal, category_id, name):
-    person = _person_for(principal)
+    person = require_person(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     category = visible_rows(Category, person).select_for_update().filter(pk=category_id).first()
     if category is None or category.code == Category.Code.TRANSFER:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     cleaned = name.strip()
     if not cleaned:
         raise ValidationError("Enter a category name.")

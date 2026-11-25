@@ -5,7 +5,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from ..ai.types import UNKNOWN_BACKEND_LABEL, backend_display_name
-from .people import Person, person_for as _person_for
+from .people import Person, person_for
 from .categories import Category
 from .ledger import Transaction
 
@@ -39,7 +39,7 @@ class AiProviderConnection(models.Model):
 
     class QuerySet(models.QuerySet):
         def owned_by(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(owner=person)
@@ -108,7 +108,7 @@ class AiJob(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(member=person)
@@ -147,7 +147,7 @@ class AiUsageEvent(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(member=person)
@@ -185,13 +185,13 @@ class AiConversation(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(member=person, expires_at__gt=timezone.now())
 
         def owned_by(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(member=person)
@@ -235,7 +235,7 @@ class AiConversationMessage(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(conversation__member=person)
@@ -352,7 +352,7 @@ class AiProposal(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(conversation__member=person, conversation__expires_at__gt=timezone.now())
@@ -402,7 +402,7 @@ class CategorySuggestion(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             visible = Transaction.objects.visible_to(person).values("pk")  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other visible_to calls in the baseline

@@ -18,7 +18,7 @@ from .ai.services import member_has_ai, resolve_ai, run_structured
 from .ai.tools import ai_nameable_categories, visible_accounts
 from .ai.types import ProviderResult
 from .lifecycle_services import lock_actor_household
-from .access import DENIED as _DENIED, require_person as _person_for
+from .access import DENIED, require_person
 from .category_services import assign_category, assignable_categories
 from .ledger_counting import exclusion_exists_for
 from .models import AiJob, Category, CategoryRule, CategorySuggestion, Transaction
@@ -60,7 +60,7 @@ def eligible_uncategorized(person, transaction_ids=None):
 
 
 def queue_category_suggestions_for(principal, transactions):
-    person = _person_for(principal)
+    person = require_person(principal)
     if not member_has_ai(person):
         return []
     ids = list(eligible_uncategorized(person, [item.pk for item in transactions]).values_list("pk", flat=True))
@@ -68,7 +68,7 @@ def queue_category_suggestions_for(principal, transactions):
 
 
 def queue_remaining_uncategorized(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     if not member_has_ai(person):
         return []
     ids = list(eligible_uncategorized(person).values_list("pk", flat=True))
@@ -169,7 +169,7 @@ def accept_suggestion(principal, suggestion_id):
         or suggestion.status != CategorySuggestion.Status.PENDING
         or not suggestion_is_current(suggestion, txn)
     ):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if not _may_apply(person, txn):
         suggestion.status = CategorySuggestion.Status.REJECTED
         suggestion.resolved_at = timezone.now()
@@ -190,7 +190,7 @@ def reject_suggestion(principal, suggestion_id):
         pk=suggestion.pk, status=CategorySuggestion.Status.PENDING
     ).update(status=CategorySuggestion.Status.REJECTED, resolved_at=now, updated_at=now)
     if not changed:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     suggestion.refresh_from_db()
     return suggestion
 
@@ -443,7 +443,7 @@ def _store_suggestion(person, txn, category_id, *, provider, backend):
 
 @transaction.atomic
 def _locked_pending(principal, suggestion_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     suggestion = (
         CategorySuggestion.objects.visible_to(person)
         .select_related("transaction", "category")
@@ -451,10 +451,10 @@ def _locked_pending(principal, suggestion_id):
         .first()
     )
     if suggestion is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     txn = suggestion.transaction
     if not suggestion_is_current(suggestion, txn):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return person, suggestion, txn
 
 

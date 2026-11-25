@@ -48,7 +48,7 @@ from ..encryption import decrypt_secret, encrypt_secret
 from ..audit_services import append_event, report_write_gap
 from ..audit_operations import member_operation, outcome
 from ..audit_models import METADATA_ENUM_KEYS
-from ..lifecycle_services import _DENIED, _person_for
+from ..access import DENIED, require_person
 from ..models import AiJob, AuditEvent, AiProviderConnection, AiUsageEvent, Membership
 from ..policy_services import may_use_ai
 from ..households import current_household
@@ -81,21 +81,21 @@ class AiError(Exception):
 
 def connection_for(principal):
     """The member's Agent Harness connection. API-key connections are separate."""
-    person = _person_for(principal)
+    person = require_person(principal)
     return AiProviderConnection.objects.owned_by(person).filter(  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
         kind=AiProviderConnection.Kind.AGENT_HARNESS
     ).first()
 
 
 def api_connection(principal, kind):
-    person = _person_for(principal)
+    person = require_person(principal)
     if kind not in API_KINDS:
         return None
     return AiProviderConnection.objects.owned_by(person).filter(kind=kind).first()  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
 
 
 def api_connections(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     return list(AiProviderConnection.objects.owned_by(person).filter(kind__in=API_KINDS).order_by("kind"))  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
 
 
@@ -106,7 +106,7 @@ def preferred_api_connection(person, *, use_chat):
 
 def member_has_ai(principal):
     try:
-        person = _person_for(principal)
+        person = require_person(principal)
     except PermissionDenied:
         return False
     if not may_use_ai(person):
@@ -118,7 +118,7 @@ def member_has_ai(principal):
 
 
 def offered_local_connection(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     household = current_household(person)
     if household is None:
         return None
@@ -145,7 +145,7 @@ def _linked_plan(person, backend):
 
 
 def resolve_ai(principal, *, use_chat, requested_backend=None):
-    person = _person_for(principal)
+    person = require_person(principal)
     requested = (requested_backend or "").strip()
     if requested in API_KINDS:
         return api_connection(person, requested), requested
@@ -184,7 +184,7 @@ def resolve_ai(principal, *, use_chat, requested_backend=None):
 
 
 def connect_harness(principal, *, base_url, token):
-    person = _person_for(principal)
+    person = require_person(principal)
     if not may_use_ai(person):
         raise AiError(CONNECT_DENIED, AUTHORIZATION_REQUIRED)
     url = parse_harness_url(base_url)
@@ -226,7 +226,7 @@ def connect_harness(principal, *, base_url, token):
 
 def connect_api_key(principal, *, kind, key, chat_model="", background_model=""):
     """Save a member's own provider key. It is stored encrypted and never shown again."""
-    person = _person_for(principal)
+    person = require_person(principal)
     if not may_use_ai(person):
         raise AiError(CONNECT_DENIED, AUTHORIZATION_REQUIRED)
     if kind not in API_KINDS:
@@ -259,7 +259,7 @@ def connect_api_key(principal, *, kind, key, chat_model="", background_model="")
 
 @transaction.atomic
 def set_api_defaults(principal, *, kind, chat_model, background_model, use_chat, use_background):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection = api_connection(person, kind)
     if connection is None:
         raise AiError("Connect that provider first.")
@@ -299,7 +299,7 @@ def _audit_defaults(person, connection, before, before_local):
 
 @transaction.atomic
 def disconnect_api_key(principal, kind):
-    person = _person_for(principal)
+    person = require_person(principal)
     if kind in API_KINDS:
         rows = list(AiProviderConnection.objects.owned_by(person).filter(kind=kind))  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
         AiProviderConnection.objects.owned_by(person).filter(kind=kind).delete()  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
@@ -331,7 +331,7 @@ def _clear_other_choices(person, *, keep=None, chat=False, background=False, sha
 
 def api_usage_summary(principal):
     """Approximate tokens this calendar month on the member's own API connections."""
-    person = _person_for(principal)
+    person = require_person(principal)
     start = timezone.localtime().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     totals = {kind: 0 for kind in API_KINDS}
     rows = AiUsageEvent.objects.visible_to(person).filter(provider__in=API_KINDS, created_at__gte=start)  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
@@ -361,7 +361,7 @@ def _connect_failure_message(exc):
 
 @transaction.atomic
 def disconnect_harness(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection = connection_for(person)
     if connection is not None:
         stop_shared_local_use(connection)
@@ -387,7 +387,7 @@ def _forget_saved_sessions(person):
 
 @transaction.atomic
 def set_defaults(principal, *, chat_backend, background_backend, chat_model="", background_model=""):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection = connection_for(person)
     if connection is None:
         raise AiError("Connect an AI backend first.")
@@ -437,7 +437,7 @@ def audit_offer_change(person, action, connection, field):
 
 @transaction.atomic
 def set_offer_local_to_household(principal, offered):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection = _own_connection(person)
     enabled = bool(offered)
     was = connection.offer_local_to_household
@@ -452,7 +452,7 @@ def set_offer_local_to_household(principal, offered):
 
 @transaction.atomic
 def set_offer_local_chat(principal, offered):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection = _own_connection(person)
     was = connection.offer_local_chat
     connection.offer_local_chat = bool(offered)
@@ -464,7 +464,7 @@ def set_offer_local_chat(principal, offered):
 
 @transaction.atomic
 def set_shared_local_use(principal, *, chat, background):
-    person = _person_for(principal)
+    person = require_person(principal)
     if not may_use_ai(person):
         raise AiError(CONNECT_DENIED, AUTHORIZATION_REQUIRED)
     want_chat = bool(chat)
@@ -504,7 +504,7 @@ def stop_shared_local_use(connection):
 
 
 def discovered_backends(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection = _own_connection(person)
     token = _token(connection)
     try:
@@ -522,7 +522,7 @@ def discovered_backends(principal):
 
 
 def local_status(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection, _backend = resolve_ai(person, use_chat=True)
     if connection is None:
         connection = _own_connection(person)
@@ -533,10 +533,10 @@ def local_status(principal):
 
 
 def warm_for_chat(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection, backend = resolve_ai(person, use_chat=True)
     if connection is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if backend != LOCAL_BACKEND:
         return local_status(person)
     try:
@@ -657,7 +657,7 @@ def _run(
     history=(),
     tool_budget=None,
 ):
-    person = _person_for(principal)
+    person = require_person(principal)
     if not may_use_ai(person):
         return ProviderResult(ok=False, failure_code=AUTHORIZATION_REQUIRED)
     if connection is not None:
@@ -891,7 +891,7 @@ def _shared_local_cap_reached(person):
 def _own_connection(person):
     connection = connection_for(person)
     if connection is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return connection
 
 

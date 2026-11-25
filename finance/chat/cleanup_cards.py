@@ -16,7 +16,7 @@ from itertools import islice
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.urls import reverse
 
-from ..access import DENIED as _DENIED
+from ..access import DENIED
 from ..ai.tools import (
     MAX_TOOL_ROWS,
     WITHHELD_CATEGORY_NAME,
@@ -27,7 +27,7 @@ from ..ai.tools import (
     visible_accounts,
 )
 from ..ai.types import ToolResult, ToolSpec
-from ..bulk_edit_services import _apply_note
+from ..bulk_edit_services import apply_note
 from ..cash_flow import format_minor
 from ..ledger_counting import with_transfer_state
 from ..ledger_edits import lock_accounts_and_transactions
@@ -559,7 +559,7 @@ _propose_splits = _proposer(AiProposal.Kind.SPLITS, _split_row, show_refused=Tru
 def _visible_or_denied(query, pk):
     found = query.filter(pk=pk).first()
     if found is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return found
 
 
@@ -572,7 +572,7 @@ def _locked(model, pk):
     """Re-read a target under its row lock, so the snapshot check and the service see the same row."""
     found = model.objects.select_for_update(of=("self",)).filter(pk=pk).first()
     if found is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return found
 
 
@@ -636,7 +636,7 @@ def _apply_note_row(person, _payload, row):
     if len(_with_note(txn.note or "", row["note"])) > MAX_NOTE_CHARS:
         raise ValidationError(NOTE_TOO_LONG)
     # Bulk edit's append-note step: the note line plus a correction-history row.
-    _apply_note(person, txn, row["note"])
+    apply_note(person, txn, row["note"])
     return {"status": ITEM_NOTED, "id": txn.pk}
 
 

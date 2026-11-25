@@ -134,10 +134,13 @@ from .reports import (  # noqa: F401
     SheetMonthTotal,
 )
 
+# Member lookup that returns None when there is no member (finance.access.require_person
+# raises instead). Re-exported so callers import it as finance.models.person_for.
+from .people import person_for  # noqa: F401
+
 # Private names callers and migrations still import from finance.models. The
 # submodules expose them under public names because the import contract
 # (tests/test_import_contract.py) records every cross-module `_name` import.
-from .people import person_for as _person_for  # noqa: F401
 from .people import PrivateOrHouseholdQuerySet as _PrivateOrHouseholdQuerySet  # noqa: F401
 from .accounts import ACCOUNT_SORT_VALUES as _ACCOUNT_SORT_VALUES  # noqa: F401
 from .planning import detach_draw_downs as _detach_draw_downs  # noqa: F401

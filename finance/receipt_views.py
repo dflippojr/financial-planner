@@ -4,7 +4,7 @@ from django.shortcuts import redirect
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET
 
-from .access import service_or_404 as _service_or_404
+from .access import service_or_404
 from .audit_services import record_download
 from .forms import ReceiptUploadForm
 from .models import Receipt
@@ -26,7 +26,7 @@ def receipt_upload(request, transaction_id):
     form = ReceiptUploadForm(request.POST, request.FILES)
     if form.is_valid():
         try:
-            _service_or_404(lambda: attach_receipt(request.user, transaction_id, form.cleaned_data["receipt"]))
+            service_or_404(lambda: attach_receipt(request.user, transaction_id, form.cleaned_data["receipt"]))
         except ValidationError as exc:
             form.add_error("receipt", exc.messages[0] if exc.messages else "That file could not be attached.")
             return render_transaction_edit(request, financial_transaction, receipt_form=form)
@@ -38,7 +38,7 @@ def receipt_upload(request, transaction_id):
 @never_cache
 def receipt_delete(request, transaction_id, receipt_id):
     visible_active_transaction(request.user, transaction_id)
-    _service_or_404(lambda: remove_receipt(request.user, transaction_id, receipt_id))
+    service_or_404(lambda: remove_receipt(request.user, transaction_id, receipt_id))
     return redirect("transaction-edit", transaction_id=transaction_id)
 
 

@@ -7,8 +7,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from .access import first_message as _first_message
-from .access import service_or_404 as _service_or_404
+from .access import first_message
+from .access import service_or_404
 from .access import visible_rows
 from .forms import (
     CategoryNameForm,
@@ -42,9 +42,9 @@ def _handle_add_category(request, forms):
     if not add_form.is_valid():
         return False
     try:
-        _service_or_404(lambda: add_category(request.user, add_form.cleaned_data["name"]))
+        service_or_404(lambda: add_category(request.user, add_form.cleaned_data["name"]))
     except ValidationError as exc:
-        add_form.add_error("name", _first_message(exc, "The category could not be saved."))
+        add_form.add_error("name", first_message(exc, "The category could not be saved."))
         return False
     return True
 
@@ -56,9 +56,9 @@ def _handle_transfer_window(request, forms):
         return False
     days = window_form.cleaned_data["transfer_match_window_days"]
     try:
-        _service_or_404(lambda: set_transfer_window_days(request.user, days))
+        service_or_404(lambda: set_transfer_window_days(request.user, days))
     except ValidationError as exc:
-        window_form.add_error("transfer_match_window_days", _first_message(exc, "The match window could not be saved."))
+        window_form.add_error("transfer_match_window_days", first_message(exc, "The match window could not be saved."))
         return False
     return True
 
@@ -69,7 +69,7 @@ def _handle_rename_category(request, forms):
     if not rename_form.is_valid():
         return False
     try:
-        _service_or_404(
+        service_or_404(
             lambda: rename_category(
                 request.user,
                 int(request.POST.get("category_id", "0")),
@@ -77,7 +77,7 @@ def _handle_rename_category(request, forms):
             )
         )
     except (ValidationError, ValueError) as exc:
-        forms["rename_error"] = _first_message(exc, "The category could not be renamed.")
+        forms["rename_error"] = first_message(exc, "The category could not be renamed.")
         return False
     return True
 
@@ -96,9 +96,9 @@ def _handle_add_tag(request, forms):
     if not add_form.is_valid():
         return False
     try:
-        _service_or_404(lambda: add_tag(request.user, add_form.cleaned_data["name"]))
+        service_or_404(lambda: add_tag(request.user, add_form.cleaned_data["name"]))
     except ValidationError as exc:
-        add_form.add_error("name", _first_message(exc, "The tag could not be added."))
+        add_form.add_error("name", first_message(exc, "The tag could not be added."))
         return False
     return True
 
@@ -109,7 +109,7 @@ def _handle_rename_tag(request, forms):
     if not rename_form.is_valid():
         return False
     try:
-        _service_or_404(
+        service_or_404(
             lambda: rename_tag(
                 request.user,
                 int(request.POST.get("tag_id", "0")),
@@ -117,7 +117,7 @@ def _handle_rename_tag(request, forms):
             )
         )
     except (ValidationError, ValueError) as exc:
-        forms["rename_error"] = _first_message(exc, "The tag could not be renamed.")
+        forms["rename_error"] = first_message(exc, "The tag could not be renamed.")
         return False
     return True
 
@@ -125,9 +125,9 @@ def _handle_rename_tag(request, forms):
 
 def _handle_archive_tag(request, forms):
     try:
-        _service_or_404(lambda: archive_tag(request.user, int(request.POST.get("tag_id", "0"))))
+        service_or_404(lambda: archive_tag(request.user, int(request.POST.get("tag_id", "0"))))
     except (ValidationError, ValueError) as exc:
-        forms["rename_error"] = _first_message(exc, "The tag could not be archived.")
+        forms["rename_error"] = first_message(exc, "The tag could not be archived.")
         return False
     return True
 
@@ -226,8 +226,8 @@ def transfer_review(request):
         handler = actions.get(action)
         if handler is None:
             raise Http404
-        pair = _service_or_404(lambda: handler(request.user, pair_id))
-        _service_or_404(lambda: refresh_transfer_pairs(
+        pair = service_or_404(lambda: handler(request.user, pair_id))
+        service_or_404(lambda: refresh_transfer_pairs(
             request.user, transaction_ids=[pair.leg_a_id, pair.leg_b_id]  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute, as in models.py
         ))
         return redirect("transfer-review")

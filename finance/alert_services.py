@@ -10,14 +10,14 @@ from django.db.models.functions import Cast, Concat
 from django.urls import reverse
 from django.utils import timezone
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .alert_email import notify_after_alert_run
 from .audit_services import append_event
 from .audit_operations import journal_run, outcome, scheduled_operation
 from .budget_services import progress_snapshot, progress_snapshots
 from .cash_flow import format_minor
 from .input_limits import MAX_LARGE_ALERTS
-from .models import _person_for
+from .models import person_for
 from .models import (
     AuditEvent,
     Account,
@@ -108,7 +108,7 @@ def _budget_id_from_dedupe(dedupe_key):
 
 
 def alerts_for(principal):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
         return Alert.objects.none()
     visible_accounts = Account.objects.visible_to(person).values("pk")
@@ -140,7 +140,7 @@ def unread_alert_count(principal):
 def mark_alert_read(principal, alert_id):
     alert = alerts_for(principal).filter(pk=alert_id).first()
     if alert is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if alert.read_at is None:
         alert.read_at = timezone.now()
         alert.save(update_fields=("read_at",))
@@ -184,9 +184,9 @@ def save_alert_settings(
     import_due_enabled=True,
     fund_enabled=True,
 ):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     prefs = settings_for(person)
     before = {name: getattr(prefs, name) for name in (*_ALERT_TOGGLES, *_ALERT_THRESHOLDS)}
     prefs.sync_enabled = bool(sync_enabled)

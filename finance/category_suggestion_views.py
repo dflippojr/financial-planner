@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.views.decorators.cache import never_cache
 
 from .access import request_person as _person
-from .access import service_or_404 as _service_or_404
+from .access import service_or_404
 from .category_suggestion_services import (
     accept_suggestion,
     accept_suggestions,
@@ -43,14 +43,14 @@ def suggest_categories(request):
 @post_only("transaction-list")
 @never_cache
 def suggestion_accept(request, suggestion_id):
-    _service_or_404(lambda: accept_suggestion(request.user, suggestion_id))
+    service_or_404(lambda: accept_suggestion(request.user, suggestion_id))
     return redirect(_safe_next(request))
 
 
 @post_only("transaction-list")
 @never_cache
 def suggestion_reject(request, suggestion_id):
-    _service_or_404(lambda: reject_suggestion(request.user, suggestion_id))
+    service_or_404(lambda: reject_suggestion(request.user, suggestion_id))
     return redirect(_safe_next(request))
 
 
@@ -69,5 +69,5 @@ def suggestion_accept_all(request):
         .filter(pk__in=ids, status=CategorySuggestion.Status.PENDING)
         .values_list("pk", flat=True)
     )
-    _service_or_404(lambda: accept_suggestions(request.user, [pk for pk in ids if pk in shown]))
+    service_or_404(lambda: accept_suggestions(request.user, [pk for pk in ids if pk in shown]))
     return redirect(_safe_next(request))

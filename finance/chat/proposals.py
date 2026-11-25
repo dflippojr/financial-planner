@@ -17,14 +17,14 @@ from django.db.models.functions import Concat
 from django.urls import reverse
 from django.utils import timezone
 
-from ..access import first_message as _first_message
+from ..access import first_message
 from ..ai.tools import ai_nameable_categories, household_consent_complete, visible_accounts
 from ..ai.types import ToolResult, ToolSpec
 from ..audit_services import origin, record
-from ..bulk_edit_services import _apply_tags
+from ..bulk_edit_services import apply_tags
 from ..budget_services import amount_for, parse_month, save_budget, validate_budget_month
 from ..cash_flow import format_minor
-from ..access import DENIED as _DENIED, require_person as _person_for
+from ..access import DENIED, require_person
 from ..category_services import assign_category, assignable_categories
 from ..households import current_household
 from ..ledger_counting import exclusion_exists_for
@@ -686,7 +686,7 @@ def _goal_dependency(person, depends_on_id, goal, goals, scope, household):
     except PermissionDenied as exc:
         raise _RowProblem(DEPENDENCY_UNAVAILABLE) from exc
     except ValidationError as exc:
-        raise _RowProblem(f"Buy after: {_first_message(exc, REFUSED, stringify=True)}") from exc
+        raise _RowProblem(f"Buy after: {first_message(exc, REFUSED, stringify=True)}") from exc
     return dependency
 
 
@@ -812,12 +812,12 @@ def _propose_set_budgets(person, args, conversation, turn):
 
 
 def proposal_for(principal, proposal_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     return AiProposal.objects.visible_to(person).filter(pk=proposal_id).first()  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
 
 
 def dismiss_proposal(principal, proposal_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     with transaction.atomic():
         proposal = _locked_pending(person, proposal_id)
         proposal.status = AiProposal.Status.DISMISSED
@@ -833,7 +833,7 @@ def apply_proposal(principal, proposal_id, *, selected=None):
     item that can be applied. Raises PermissionDenied when the proposal is not the member's.
     Raises ProposalError with a member-facing reason when it is already handled, stale, or refused.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     stale = None
     stale_items = None
     try:
@@ -855,7 +855,7 @@ def apply_proposal(principal, proposal_id, *, selected=None):
             except PermissionDenied as exc:
                 raise ProposalError(REFUSED) from exc
             except ValidationError as exc:
-                raise ProposalError(_first_message(exc, REFUSED, stringify=True)) from exc
+                raise ProposalError(first_message(exc, REFUSED, stringify=True)) from exc
             _label_history(person, before)
             proposal.status = AiProposal.Status.APPLIED
             proposal.result = result
@@ -885,7 +885,7 @@ def _locked_pending(person, proposal_id):
         AiProposal.objects.visible_to(person).select_for_update(of=("self",)).filter(pk=proposal_id).first()  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
     )
     if proposal is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if proposal.status != AiProposal.Status.PENDING:
         raise ProposalError(ALREADY_RESOLVED)
     return proposal
@@ -999,7 +999,7 @@ def _apply_add_tags(person, payload):
         tags.append(found or add_tag(person, name))
     for txn in txns:
         before = set(txn.tags.values_list("pk", flat=True))
-        _apply_tags(person, txn, tags, add=True)
+        apply_tags(person, txn, tags, add=True)
         if before != set(txn.tags.values_list("pk", flat=True)):
             record(person, AuditEvent.Action.TAGS_CHANGED, AuditEvent.TargetType.TRANSACTION, txn.pk,
                    audience={"account": Account(pk=txn.account_id)}, fields=("tags",), verified=True)
@@ -1064,7 +1064,7 @@ def _apply_items(person, payload, selected, apply_row):
         except PermissionDenied:
             results.append({"status": ITEM_FAILED, "message": ITEM_UNAVAILABLE})
         except ValidationError as exc:
-            results.append({"status": ITEM_FAILED, "message": _first_message(exc, REFUSED, stringify=True)})
+            results.append({"status": ITEM_FAILED, "message": first_message(exc, REFUSED, stringify=True)})
         except IntegrityError:
             results.append({"status": ITEM_FAILED, "message": REFUSED})
         else:
@@ -1080,7 +1080,7 @@ def _apply_planned_row(person, _payload, row):
     if row["action"] != "create":
         item = _visible_planned(person).select_for_update().filter(pk=row["id"]).first()
         if item is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         if _planned_values(item) != row["before"]:
             raise _Stale(NO_LONGER_APPLIES)
     form = _planned_form(person, row["values"], item)
@@ -1104,7 +1104,7 @@ def _apply_goal_row(person, _payload, row):
             .first()
         )
         if goal is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         if _goal_values(goal) != row["before"]:
             raise _Stale(NO_LONGER_APPLIES)
     problem, values = _goal_check(person, row["values"], goal, _visible_goals(person))

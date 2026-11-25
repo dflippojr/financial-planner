@@ -12,8 +12,8 @@ from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods
 
-from .access import first_message as _first_message
-from .access import service_or_404 as _service_or_404
+from .access import first_message
+from .access import service_or_404
 from .access import visible_rows
 from .post_only import post_only
 from .transaction_services import correct_transaction
@@ -200,7 +200,7 @@ def transaction_saved_filter_create(request):
 @post_only("transaction-list")
 @never_cache
 def transaction_saved_filter_delete(request, filter_id):
-    _service_or_404(lambda: delete_saved_transaction_filter(request.user, filter_id))
+    service_or_404(lambda: delete_saved_transaction_filter(request.user, filter_id))
     return redirect("transaction-list")
 
 
@@ -208,7 +208,7 @@ def transaction_saved_filter_delete(request, filter_id):
 @require_GET
 @never_cache
 def transaction_saved_filter_apply(request, filter_id):
-    url = _service_or_404(lambda: apply_saved_filter_url(request.user, filter_id))
+    url = service_or_404(lambda: apply_saved_filter_url(request.user, filter_id))
     return redirect(url)
 
 
@@ -254,9 +254,9 @@ def transaction_edit(request, transaction_id):
                 try:
                     correct_transaction(person, financial_transaction, form.cleaned_data)
                 except ValidationError as exc:
-                    form.add_error("amount", _first_message(exc, "The amount could not be saved."))
+                    form.add_error("amount", first_message(exc, "The amount could not be saved."))
                     return render_transaction_edit(request, financial_transaction, form=form)
-            _service_or_404(lambda: refresh_transfer_pairs(
+            service_or_404(lambda: refresh_transfer_pairs(
                 request.user, transaction_ids=[financial_transaction.pk], previous_keys=[previous_key]
             ))
             return redirect("transaction-list")
@@ -371,7 +371,7 @@ def transaction_note_tags(request, transaction_id):
     form = TransactionNoteTagsForm(request.POST, principal=request.user)
     if form.is_valid():
         try:
-            _service_or_404(
+            service_or_404(
                 lambda: set_transaction_note_and_tags(
                     request.user,
                     transaction_id,
@@ -381,7 +381,7 @@ def transaction_note_tags(request, transaction_id):
                 )
             )
         except ValidationError as exc:
-            form.add_error(None, _first_message(exc, "The note and tags could not be saved."))
+            form.add_error(None, first_message(exc, "The note and tags could not be saved."))
             return render_transaction_edit(request, financial_transaction, note_form=form)
         return redirect("transaction-edit", transaction_id=transaction_id)
     return render_transaction_edit(request, financial_transaction, note_form=form)
@@ -396,7 +396,7 @@ def transaction_categorize(request, transaction_id):
     if form.is_valid():
         category = form.cleaned_data["category"]
         try:
-            _service_or_404(
+            service_or_404(
                 lambda: assign_category(request.user, transaction_id, None if category is None else category.pk)
             )
         except ValidationError:
@@ -417,9 +417,9 @@ def transaction_untracked_transfer(request, transaction_id):
     marked = action == "mark"
     service = mark_untracked_transfer if marked else unmark_untracked_transfer
     try:
-        _service_or_404(lambda: service(request.user, transaction_id))
+        service_or_404(lambda: service(request.user, transaction_id))
     except ValidationError as exc:
-        messages.error(request, _first_message(exc, "The transfer mark could not be changed."))
+        messages.error(request, first_message(exc, "The transfer mark could not be changed."))
     else:
         messages.success(
             request,
@@ -438,7 +438,7 @@ def transaction_link_refund(request, transaction_id):
     form = RefundLinkForm(request.POST, principal=request.user, refund=financial_transaction)
     if form.is_valid():
         try:
-            _service_or_404(
+            service_or_404(
                 lambda: link_refund(
                     request.user,
                     transaction_id,
@@ -447,7 +447,7 @@ def transaction_link_refund(request, transaction_id):
                 )
             )
         except ValidationError as exc:
-            form.add_error(None, _first_message(exc, "The refund could not be linked."))
+            form.add_error(None, first_message(exc, "The refund could not be linked."))
         else:
             return redirect("transaction-edit", transaction_id=transaction_id)
     return render_transaction_edit(request, financial_transaction, refund_form=form)
@@ -461,7 +461,7 @@ def transaction_split(request, transaction_id):
     form = SplitTransactionForm(request.POST, principal=request.user, transaction=financial_transaction)
     if form.is_valid():
         try:
-            _service_or_404(
+            service_or_404(
                 lambda: split_transaction(
                     request.user,
                     transaction_id,
@@ -470,7 +470,7 @@ def transaction_split(request, transaction_id):
                 )
             )
         except ValidationError as exc:
-            form.add_error(None, _first_message(exc, "The transaction could not be split."))
+            form.add_error(None, first_message(exc, "The transaction could not be split."))
         else:
             return redirect("transaction-edit", transaction_id=transaction_id)
     return render_transaction_edit(request, financial_transaction, split_form=form)
@@ -484,7 +484,7 @@ def transaction_unsplit(request, transaction_id):
     form = UnsplitTransactionForm(request.POST, principal=request.user)
     if form.is_valid():
         category = form.cleaned_data["category"]
-        _service_or_404(
+        service_or_404(
             lambda: unsplit_transaction(
                 request.user,
                 transaction_id,
@@ -502,7 +502,7 @@ def transaction_split_part_category(request, transaction_id, part_id):
     part = get_object_or_404(TransactionSplit, pk=part_id, transaction=financial_transaction)
     form = SplitPartCategoryForm(request.POST, principal=request.user, prefix=f"part{part.pk}")
     if form.is_valid():
-        _service_or_404(
+        service_or_404(
             lambda: assign_split_part_category(request.user, part.pk, form.cleaned_data["category"].pk)
         )
     return redirect("transaction-edit", transaction_id=transaction_id)

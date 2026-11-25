@@ -7,7 +7,7 @@ from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.db.models.functions import Abs
 from django.urls import reverse
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .ledger_counting import exclusion_exists_for
 from .models import (
     SAVED_FILTER_QUERY_KEYS,
@@ -18,8 +18,8 @@ from .models import (
     Tag,
     Transaction,
     TransactionSplit,
-    _person_for,
     TransactionCorrectionHistory,
+    person_for,
 )
 from .tag_services import apply_tag_filter
 
@@ -128,9 +128,9 @@ def sanitize_saved_query(principal, query):
 
 
 def save_transaction_filter(principal, *, name, query):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     cleaned_name = (name or "").strip()
     if not cleaned_name:
         raise ValidationError("Enter a name for this filter set.")
@@ -144,21 +144,21 @@ def save_transaction_filter(principal, *, name, query):
 
 
 def delete_saved_transaction_filter(principal, filter_id):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     deleted, _counts = SavedTransactionFilter.objects.visible_to(person).filter(pk=filter_id).delete()
     if not deleted:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
 
 
 def apply_saved_filter_url(principal, filter_id):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     saved = SavedTransactionFilter.objects.visible_to(person).filter(pk=filter_id).first()
     if saved is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     params = sanitize_saved_query(person, saved.query)
     encoded = urlencode(params)
     path = reverse("transaction-list")

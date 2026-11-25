@@ -14,7 +14,7 @@ from .people import (
     Household,
     Membership,
     Person,
-    person_for as _person_for,
+    person_for,
     PrivateOrHouseholdQuerySet as _PrivateOrHouseholdQuerySet,
 )
 
@@ -45,7 +45,7 @@ class SavedCsvMapping(ArchivableModel):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             current_households = Membership.objects.filter(

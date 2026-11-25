@@ -5,8 +5,8 @@ from decimal import Decimal
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .access import visible_rows
 from .category_services import assignable_categories
 from .ledger_counting import with_transfer_state
@@ -63,7 +63,7 @@ def _normalized_parts(person, parent, parts):
             raise ValidationError(SPLIT_SIGN_ERROR)
         category = assignable.get(category_id)
         if category is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         total += amount_minor
         normalized.append((index, category, amount_minor))
     if total != parent.amount_minor:
@@ -161,7 +161,7 @@ def _replace_splits(parent, normalized):
 
 @transaction.atomic
 def split_transaction(principal, txn_id, parts, refund_assignments=None):
-    person = _person_for(principal)
+    person = require_person(principal)
     financial_transaction = (
         visible_rows(Transaction, person)
         .filter(pk=txn_id, status=Transaction.Status.ACTIVE)
@@ -169,12 +169,12 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
         .first()
     )
     if financial_transaction is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     refunds = _linked_original_refunds(financial_transaction)
     lock_actor_household(person)
     locked = lock_owned_transactions([financial_transaction, *refunds])
     if not visible_rows(Transaction, person).filter(pk=financial_transaction.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
     refunds = [by_id[item.pk] for item in refunds]
@@ -211,7 +211,7 @@ def split_transaction(principal, txn_id, parts, refund_assignments=None):
 
 @transaction.atomic
 def unsplit_transaction(principal, txn_id, category_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     financial_transaction = (
         visible_rows(Transaction, person)
         .filter(pk=txn_id, status=Transaction.Status.ACTIVE)
@@ -219,19 +219,19 @@ def unsplit_transaction(principal, txn_id, category_id):
         .first()
     )
     if financial_transaction is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if financial_transaction.category_source != Transaction.CategorySource.SPLIT:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     category = None
     if category_id:
         category = assignable_categories(person).filter(pk=category_id).first()
         if category is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     refunds = _linked_original_refunds(financial_transaction)
     lock_actor_household(person)
     locked = lock_owned_transactions([financial_transaction, *refunds])
     if not visible_rows(Transaction, person).filter(pk=financial_transaction.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     by_id = {item.pk: item for item in locked}
     financial_transaction = by_id[financial_transaction.pk]
     refunds = [by_id[item.pk] for item in refunds]
@@ -261,22 +261,22 @@ def unsplit_transaction(principal, txn_id, category_id):
 
 @transaction.atomic
 def assign_split_part_category(principal, part_id, category_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     part = (
         TransactionSplit.objects.select_related("transaction", "transaction__account", "category")
         .filter(pk=part_id)
         .first()
     )
     if part is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     parent = part.transaction
     if not visible_rows(Transaction, person).filter(pk=parent.pk, status=Transaction.Status.ACTIVE).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if parent.category_source != Transaction.CategorySource.SPLIT:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     category = assignable_categories(person).filter(pk=category_id).first()
     if category is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     refunds = list(
         Transaction.objects.filter(
             refund_link__original_part=part,
@@ -286,7 +286,7 @@ def assign_split_part_category(principal, part_id, category_id):
     lock_actor_household(person)
     locked = lock_owned_transactions([parent, *refunds])
     if not visible_rows(Transaction, person).filter(pk=parent.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     by_id = {item.pk: item for item in locked}
     parent = by_id[parent.pk]
     refunds = [by_id[item.pk] for item in refunds]

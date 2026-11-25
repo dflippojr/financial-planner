@@ -19,7 +19,7 @@ from decimal import Decimal
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.urls import reverse
 
-from ..access import DENIED as _DENIED
+from ..access import DENIED
 from ..ai.tools import visible_accounts
 from ..cash_flow import format_minor
 from .proposals import (
@@ -39,7 +39,7 @@ from .proposals import (
 from ..forms.accounts import ManualBalanceForm
 from ..forms.common import BALANCE_RANGE_ERROR, MAX_BALANCE_MINOR
 from ..models import Account, AiProposal, BalanceSnapshot
-from ..snapshot_services import SnapshotError, _lock_editable_account, record_manual_snapshot
+from ..snapshot_services import SnapshotError, lock_editable_account, record_manual_snapshot
 
 MAX_NOTE_CHARS = 200
 ACCOUNT_ARCHIVED = "This account is archived, so its balances can't change. Restore it on its page first."
@@ -242,11 +242,11 @@ def _propose_balances(person, args, conversation, turn):
 def _apply_balance_row(person, _payload, row):
     found = visible_accounts(person, include_archived=True).filter(pk=row["id"]).first()
     if found is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if found.status != Account.Status.ACTIVE:
         raise ValidationError(ACCOUNT_ARCHIVED)
     # apply_proposal already holds the household lock; this takes the account's, as the service does.
-    account = _lock_editable_account(person, row["id"])
+    account = lock_editable_account(person, row["id"])
     if account.account_type != row["account_type"]:
         raise _Stale(CHANGED)
     values = row["values"]

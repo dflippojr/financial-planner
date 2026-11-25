@@ -17,7 +17,7 @@ from .models import (
     ImportBatch,
     RecurringPriceAcknowledgement,
     RecurringSeries,
-    _person_for,
+    person_for,
 )
 from .recurring_services import cadence_tolerance_days, next_charge_date
 
@@ -219,7 +219,7 @@ def acknowledged_amounts(principal, series_list):
     """
     from .bill_grouping import group_bills, household_only_ids, stored_charge_ids
 
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None or not series_list:
         return {}
     if not RecurringPriceAcknowledgement.objects.filter(person=person).exists():
@@ -291,7 +291,7 @@ def price_change(series, percent=DEFAULT_PRICE_CHANGE_PERCENT, acknowledged=()):
 
 
 def price_change_percent_for(principal):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
         return DEFAULT_PRICE_CHANGE_PERCENT
     value = (

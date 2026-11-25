@@ -3,7 +3,7 @@ from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
-from .people import Person, person_for as _person_for
+from .people import Person, person_for
 from .accounts import Account, ImportBatch
 
 
@@ -27,7 +27,7 @@ class SimpleFinConnection(models.Model):
 
     class QuerySet(models.QuerySet):
         def owned_by(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(owner=person)

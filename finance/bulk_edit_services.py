@@ -6,7 +6,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .category_services import apply_manual_category, assignable_categories
 from .ledger_counting import exclusion_exists_for
 from .ledger_edits import history_label, record_text_history
@@ -27,7 +27,7 @@ from .models import (
     Tag,
     Transaction,
     TransactionCorrectionHistory,
-    _person_for,
+    person_for,
 )
 from .tag_services import NOTE_TOO_LONG
 from .untracked_transfers import set_mark
@@ -105,7 +105,7 @@ def _category_for(person, category_id):
         return None
     category = assignable_categories(person).filter(pk=category_id).first()
     if category is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return category
 
 
@@ -115,7 +115,7 @@ def _tags_for(person, tag_ids):
         raise ValidationError(EMPTY_TAGS)
     tags = list(Tag.objects.visible_to(person).active().filter(pk__in=requested))
     if {tag.pk for tag in tags} != set(requested):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return tags
 
 
@@ -206,9 +206,9 @@ def preview_bulk_edit(
     tag_ids=None,
     note_line="",
 ):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if action not in ACTIONS:
         raise ValidationError(UNKNOWN_ACTION)
     if action == ACTION_CATEGORY:
@@ -284,10 +284,10 @@ def _lock_rows(person, transactions, *, with_refunds=False, optional_ids=()):
     locked = [txn for txn in rows if txn.pk in set(ids) and txn.status == Transaction.Status.ACTIVE]
     optional_locked = {txn.pk: txn for txn in rows if txn.pk not in set(ids)}
     if len(locked) != len(ids):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     visible = set(_visible_active(person).filter(pk__in=required_ids).values_list("pk", flat=True))
     if visible != set(required_ids):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     excluded = {
         pk
         for pk, is_excluded in _visible_active(person)
@@ -320,7 +320,7 @@ def _apply_category(person, txn, category, refunds):
         apply_inherited_category(person, refund, category)
 
 
-def _apply_tags(person, txn, tags, *, add):
+def apply_tags(person, txn, tags, *, add):
     previous = list(txn.tags.all())
     have = {tag.pk: tag for tag in previous}
     if add:
@@ -341,7 +341,7 @@ def _apply_tags(person, txn, tags, *, add):
     )
 
 
-def _apply_note(person, txn, note_line):
+def apply_note(person, txn, note_line):
     previous = txn.note or ""
     txn.note = _append_note(txn, note_line)
     txn.save(update_fields=("note", "updated_at"))
@@ -414,9 +414,9 @@ def apply_bulk_edit(
     note_line="",
     expected_eligible_ids=None,
 ):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     preview = preview_bulk_edit(
         person,
         matching=matching,
@@ -463,15 +463,15 @@ def apply_bulk_edit(
             if action == ACTION_CATEGORY:
                 _apply_category(person, txn, category, related)
             elif action == ACTION_ADD_TAGS:
-                _apply_tags(person, txn, tags, add=True)
+                apply_tags(person, txn, tags, add=True)
             elif action == ACTION_REMOVE_TAGS:
-                _apply_tags(person, txn, tags, add=False)
+                apply_tags(person, txn, tags, add=False)
             elif action in UNTRACKED_ACTIONS:
                 if action == ACTION_MARK_UNTRACKED:
                     before["dropped_refund_links"] = dropped_refund_links([txn.pk])
                 set_mark(person, txn, action == ACTION_MARK_UNTRACKED)
             else:
-                _apply_note(person, txn, note_line)
+                apply_note(person, txn, note_line)
             txn.refresh_from_db()
             before["applied_updated_at"] = txn.updated_at.isoformat()
             _note_refund_updated_at(before.get("dropped_refund_links"))
@@ -492,12 +492,12 @@ def apply_bulk_edit(
 
 @transaction.atomic
 def undo_bulk_edit(principal, undo_id):
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     record = BulkEditUndo.objects.visible_to(person).filter(pk=undo_id).first()
     if record is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if record.undone_at is not None or record.expires_at <= timezone.now():
         raise ValidationError(UNDO_UNAVAILABLE)
     rows = record.snapshot.get("rows") or []
@@ -556,7 +556,7 @@ def undo_bulk_edit(principal, undo_id):
                 previous = list(txn.tags.all())
                 restored = list(Tag.objects.visible_to(person).filter(pk__in=item["previous_tag_ids"]))
                 if {tag.pk for tag in restored} != set(item["previous_tag_ids"]):
-                    raise PermissionDenied(_DENIED)
+                    raise PermissionDenied(DENIED)
                 txn.tags.set(restored)
                 txn.save(update_fields=("updated_at",))
                 record_text_history(

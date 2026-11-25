@@ -6,7 +6,7 @@ from django.db import models
 from django.db.models import Q
 
 from .base import sha256_validator, validate_reason_list
-from .people import Membership, Person, person_for as _person_for
+from .people import Membership, Person, person_for
 from .accounts import Account
 from .ledger import Transaction
 
@@ -59,7 +59,7 @@ class RecurringSeries(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             visible_transactions = Transaction.objects.visible_to(person).values("pk")  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other visible_to calls in the baseline
@@ -75,7 +75,7 @@ class RecurringSeries(models.Model):
             household charges is the household's to cancel or resume. A series
             with any private charge stays with its owner.
             """
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             household_ids = Membership.objects.filter(person=person, ended_at__isnull=True).values("household_id")

@@ -4,7 +4,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .access import require_person as _person
 from .access import visible_rows
 from .cash_flow import format_minor
@@ -187,7 +187,7 @@ def validate_dependency(person, goal, dependency, *, scope, household):
     if dependency is None:
         return
     if not SavingsGoal.objects.visible_to(person).filter(pk=dependency.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if goal.pk is not None and dependency.pk == goal.pk:
         raise ValidationError("A goal cannot depend on itself.")
     if scope == SavingsGoal.Scope.HOUSEHOLD:
@@ -230,7 +230,7 @@ def validate_planned_item_link(person, goal, item, *, scope, household, share):
     if item is None:
         return
     if not visible_rows(PlannedItem, person).filter(pk=item.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if not share:
         raise ValidationError(PLANNED_ITEM_SHARE_ERROR)
     if item.kind != PlannedItem.Kind.EXPENSE:
@@ -326,7 +326,7 @@ def _apply_planned_item(goal, payload, *, today):
 
 def _linked_account(person, goal, linked_account):
     if linked_account is not None and not Account.objects.visible_to(person).filter(pk=linked_account.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if linked_account is None and goal.linked_account_id is not None:
         # The edit form cannot offer an account the editor cannot see (for
         # example the owner's private account), so a blank choice there means
@@ -347,7 +347,7 @@ def save_savings_goal(principal, payload, *, goal=None):
     else:
         check_can_edit(person, goal)
         if goal.scope != scope and goal.owner_id != person.pk:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         _check_dependents_keep_scope(goal, scope)
         before = snapshot(goal, GOAL_AUDIT_FIELDS)
     was_household = goal.pk is not None and goal.scope == SavingsGoal.Scope.HOUSEHOLD

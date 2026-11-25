@@ -14,8 +14,8 @@ from django.db import transaction
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .ledger_counting import exclusion_exists_for
 from .audit_services import personal_audience, record
 from .auto_notes import (
@@ -632,7 +632,7 @@ def _candidate_queryset(person):
 
 
 def candidate_transactions(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     return list(_candidate_queryset(person).select_related("account").order_by("transaction_date", "pk"))
 
 
@@ -651,7 +651,7 @@ def _inputs_signature(person):
 
 def grouping_candidate_transactions(principal):
     """Eligible charges for add, including rows excluded only from detection."""
-    person = _person_for(principal)
+    person = require_person(principal)
     return list(_grouping_queryset(person).select_related("account").order_by("transaction_date", "pk"))
 
 
@@ -1012,7 +1012,7 @@ def revalidate_series_after_member_removal(principal, series_ids):
     left with none is deactivated. Open series with no remaining members are
     deactivated the same way.
     """
-    _person_for(principal)
+    require_person(principal)
     ids = sorted({pk for pk in series_ids if pk is not None})
     if not ids:
         return
@@ -1041,7 +1041,7 @@ def refresh_recurring_series(principal, *, only_if_changed=False, today=None):
     reads changed since the last run (the page view and daily pass use this).
     today sets the date review alerts are judged on (default: local today).
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     signature = _inputs_signature(person)
     if only_if_changed and signature == Person.objects.values_list("recurring_inputs_signature", flat=True).get(
         pk=person.pk
@@ -1105,10 +1105,10 @@ def _raise_review_alerts(person, *, today=None):
 
 
 def _visible_series(principal, series_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     series = RecurringSeries.objects.visible_to(person).filter(pk=series_id).first()
     if series is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return person, series
 
 
@@ -1119,12 +1119,12 @@ def _set_open_series_status(principal, series_id, status):
     # Take the household lock first, then check visibility and status on the
     # locked row: a concurrent refresh may delete or change the suggestion
     # while this request waits, and that must be a denial, not an error.
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     _visible_series(person, series_id)
     series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series_id).first()
     if series is None or series.status not in _OPEN_STATUSES:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     series.status = status
     fields = ["status", "updated_at"]
     if status == RecurringSeries.Status.CONFIRMED and series.confirmed_at is None:
@@ -1174,25 +1174,25 @@ def _lock_visible_series_rows(person, series_ids):
             unique_ids.append(pk)
     for pk in unique_ids:
         if RecurringSeries.objects.visible_to(person).filter(pk=pk).first() is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     locked = {
         row.pk: row
         for row in RecurringSeries.objects.select_for_update(of=("self",)).filter(pk__in=unique_ids).order_by("pk")
     }
     if len(locked) != len(unique_ids):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     visible = set(RecurringSeries.objects.visible_to(person).filter(pk__in=unique_ids).values_list("pk", flat=True))
     if visible != set(unique_ids):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     rows = [locked[pk] for pk in unique_ids]
     for series in rows:
         if series.person_id != person.pk:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     return rows
 
 
 def list_addable_transactions(principal, series, query=""):
-    person = _person_for(principal)
+    person = require_person(principal)
     claimed = _active_member_transaction_ids(person)
     needle = query.casefold().strip()
     rows = []
@@ -1235,13 +1235,13 @@ def _carry_price_acknowledgements(source, target):
 
 @transaction.atomic
 def merge_recurring_series(principal, source_id, target_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     if source_id == target_id:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     source, target = _lock_visible_series_rows(person, (source_id, target_id))
     if not _is_grouping_series(source) or not _is_grouping_series(target):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     source_txn_ids = list(source.members.values_list("transaction_id", flat=True))
     existing_ids = set(target.members.values_list("transaction_id", flat=True))
     joined = [pk for pk in source_txn_ids if pk not in existing_ids]
@@ -1278,20 +1278,20 @@ def merge_recurring_series(principal, source_id, target_id):
 
 @transaction.atomic
 def remove_recurring_member(principal, series_id, transaction_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     (series,) = _lock_visible_series_rows(person, (series_id,))
     if not _is_grouping_series(series):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     member = (
         RecurringSeriesMember.objects.select_for_update()
         .filter(series=series, transaction_id=transaction_id)
         .first()
     )
     if member is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if Transaction.objects.visible_to(person).filter(pk=transaction_id).first() is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     RecurringExclusion.objects.get_or_create(person=person, transaction_id=transaction_id)
     member.delete()
     _record_series(person, AuditEvent.Action.RECURRING_REMOVED, series, transaction_id=transaction_id)
@@ -1303,23 +1303,23 @@ def remove_recurring_member(principal, series_id, transaction_id):
 
 @transaction.atomic
 def add_recurring_members(principal, series_id, transaction_ids):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     (series,) = _lock_visible_series_rows(person, (series_id,))
     if not _is_grouping_series(series):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     requested = []
     for pk in transaction_ids:
         if pk not in requested:
             requested.append(pk)
     if not requested:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     eligible = {txn.pk for txn in grouping_candidate_transactions(person)}
     claimed = _active_member_transaction_ids(person, exclude_series_id=series.pk)
     already = set(series.members.values_list("transaction_id", flat=True))
     for pk in requested:
         if pk not in eligible or pk in claimed:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     RecurringExclusion.objects.filter(person=person, transaction_id__in=requested).delete()
     RecurringSeriesMember.objects.bulk_create(
         RecurringSeriesMember(
@@ -1344,11 +1344,11 @@ def _own_confirmed_series(person, series_id, *, lock=False):
     )
     series = query.first()
     if series is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if lock:
         series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series.pk).first()
         if series is None or series.status != RecurringSeries.Status.CONFIRMED:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     return series
 
 
@@ -1360,7 +1360,7 @@ def note_version(series):
 @transaction.atomic
 def set_recurring_series_note(principal, series_id, note):
     """Set, edit or clear a confirmed series' note. Existing charges keep their notes (#684)."""
-    person = _person_for(principal)
+    person = require_person(principal)
     line = validate_note_line(note)
     lock_actor_household(person)
     series = _own_confirmed_series(person, series_id, lock=True)
@@ -1384,7 +1384,7 @@ def _series_charges(person, series):
 
 def recurring_note_preview(principal, series_id):
     """(series, the series' current charges its note would be added to); none without a note."""
-    person = _person_for(principal)
+    person = require_person(principal)
     series = _own_confirmed_series(person, series_id)
     if not series.note:
         return series, []
@@ -1398,7 +1398,7 @@ def apply_recurring_note_to_existing(principal, series_id, *, previewed_version,
     previewed_version is note_version(series) and expected_token the preview_token
     from the preview page; if the note or the previewed rows moved, nothing is written. Returns (changed rows, undo record).
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     series = _own_confirmed_series(person, series_id, lock=True)
     if note_version(series) != previewed_version:
@@ -1420,7 +1420,7 @@ class ManualSeriesError(ValueError):
 
 def list_manual_series_candidates(principal, query="", page=1):
     """One capped page of charges a member may hand-group into a new series."""
-    person = _person_for(principal)
+    person = require_person(principal)
     claimed = _active_member_transaction_ids(person)
     rows = _grouping_queryset(person).exclude(pk__in=claimed)
     needle = query.strip()
@@ -1450,7 +1450,7 @@ def _validated_manual_selection(person, name, cadence, transaction_ids):
     }
     claimed = _active_member_transaction_ids(person)
     if any(pk not in eligible or pk in claimed for pk in requested):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     ordered = sorted((eligible[pk] for pk in requested), key=lambda row: (row.transaction_date, row.pk))
     if len({row.currency for row in ordered}) != 1:
         raise ManualSeriesError("Selected charges must share one currency.")
@@ -1458,7 +1458,7 @@ def _validated_manual_selection(person, name, cadence, transaction_ids):
 
 
 def preview_manual_series(principal, name, cadence, transaction_ids):
-    person = _person_for(principal)
+    person = require_person(principal)
     name, requested, ordered = _validated_manual_selection(person, name, cadence, transaction_ids)
     return {
         "name": name,
@@ -1473,11 +1473,11 @@ def preview_manual_series(principal, name, cadence, transaction_ids):
 
 @transaction.atomic
 def create_manual_series(principal, name, cadence, transaction_ids):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     name, requested, ordered = _validated_manual_selection(person, name, cadence, transaction_ids)
     if _fingerprint_taken(person, _fingerprint(requested), exclude_pk=None):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     descriptions = Counter(merchant_key(row.description) for row in ordered)
     series = RecurringSeries.objects.create(
         person=person,
@@ -1798,14 +1798,14 @@ def _lock_confirmed_series(principal, series_id, *, own_only=False):
     # Cancel, resume and price acknowledgement are household actions, so a
     # series another member confirmed from household charges qualifies too.
     # `own_only` keeps actions that write per-person state with the owner.
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     candidates = RecurringSeries.objects.visible_to(person) if own_only else RecurringSeries.objects.actionable_by(person)
     if not candidates.filter(pk=series_id).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     series = RecurringSeries.objects.select_for_update(of=("self",)).filter(pk=series_id).first()
     if series is None or series.status != RecurringSeries.Status.CONFIRMED or not series.is_active:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return person, series
 
 
@@ -1834,7 +1834,7 @@ def confirm_resume_recurring_series(principal, series_id):
 def keep_cancelled_recurring_series(principal, series_id):
     person, series = _lock_confirmed_series(principal, series_id, own_only=True)
     if series.cancelled_at is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     cutoff = timezone.localdate(series.cancelled_at)
     later_ids = list(
         RecurringSeriesMember.objects.filter(series=series, transaction__transaction_date__gt=cutoff).values_list(
@@ -1871,7 +1871,7 @@ def dismiss_price_change(principal, series_id):
             .first()
         )
         if latest is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         flagged = latest.transaction
     # The dismissal is this member's alone, and covers every copy of the bill
     # they may act on, so the flag stays down whichever copy shows the bill (#523).

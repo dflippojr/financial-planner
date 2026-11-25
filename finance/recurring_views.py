@@ -7,7 +7,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from .access import service_or_404 as _service_or_404
+from .access import service_or_404
 from .access import visible_rows
 from .models import (
     Person,
@@ -71,21 +71,21 @@ def _handle_recurring_post(request):
         raise Http404 from exc
     action = request.POST.get("action")
     if action == "confirm":
-        _service_or_404(lambda: confirm_recurring_series(request.user, series_id))
+        service_or_404(lambda: confirm_recurring_series(request.user, series_id))
     elif action == "dismiss":
-        _service_or_404(lambda: dismiss_recurring_series(request.user, series_id))
+        service_or_404(lambda: dismiss_recurring_series(request.user, series_id))
     elif action == "merge":
         try:
             target_id = int(request.POST.get("target_id", "0"))
         except (TypeError, ValueError) as exc:
             raise Http404 from exc
-        _service_or_404(lambda: merge_recurring_series(request.user, series_id, target_id))
+        service_or_404(lambda: merge_recurring_series(request.user, series_id, target_id))
     elif action == "remove":
         try:
             transaction_id = int(request.POST.get("transaction_id", "0"))
         except (TypeError, ValueError) as exc:
             raise Http404 from exc
-        _service_or_404(lambda: remove_recurring_member(request.user, series_id, transaction_id))
+        service_or_404(lambda: remove_recurring_member(request.user, series_id, transaction_id))
     elif action == "add":
         transaction_ids = []
         for raw in request.POST.getlist("transaction_id"):
@@ -93,20 +93,20 @@ def _handle_recurring_post(request):
                 transaction_ids.append(int(raw))
             except (TypeError, ValueError) as exc:
                 raise Http404 from exc
-        _service_or_404(lambda: add_recurring_members(request.user, series_id, transaction_ids))
+        service_or_404(lambda: add_recurring_members(request.user, series_id, transaction_ids))
     elif action == "cancel":
-        _service_or_404(lambda: cancel_recurring_series(request.user, series_id))
+        service_or_404(lambda: cancel_recurring_series(request.user, series_id))
     elif action == "undo_cancel":
-        _service_or_404(lambda: undo_cancel_recurring_series(request.user, series_id))
+        service_or_404(lambda: undo_cancel_recurring_series(request.user, series_id))
     elif action == "confirm_resume":
-        _service_or_404(lambda: confirm_resume_recurring_series(request.user, series_id))
+        service_or_404(lambda: confirm_resume_recurring_series(request.user, series_id))
     elif action == "keep_cancelled":
-        _service_or_404(lambda: keep_cancelled_recurring_series(request.user, series_id))
+        service_or_404(lambda: keep_cancelled_recurring_series(request.user, series_id))
     elif action == "dismiss_price":
-        _service_or_404(lambda: dismiss_price_change(request.user, series_id))
+        service_or_404(lambda: dismiss_price_change(request.user, series_id))
     else:
         raise Http404
-    _service_or_404(lambda: refresh_recurring_series(request.user))
+    service_or_404(lambda: refresh_recurring_series(request.user))
     return redirect("recurring-review")
 
 
@@ -136,9 +136,9 @@ def recurring_create(request):
             raise Http404
         try:
             if step == "confirm":
-                _service_or_404(lambda: create_manual_series(request.user, name, cadence, ids))
+                service_or_404(lambda: create_manual_series(request.user, name, cadence, ids))
                 return redirect("recurring-review")
-            preview = _service_or_404(lambda: preview_manual_series(request.user, name, cadence, ids))
+            preview = service_or_404(lambda: preview_manual_series(request.user, name, cadence, ids))
             preview["amount_display"] = _money_display(preview["typical_amount_minor"], preview["currency"])
             context["preview"] = preview
         except ManualSeriesError as exc:
@@ -150,7 +150,7 @@ def recurring_create(request):
         except (TypeError, ValueError):
             page = 1
         query = request.GET.get("q", "")
-        candidates, has_next = _service_or_404(lambda: list_manual_series_candidates(request.user, query, page))
+        candidates, has_next = service_or_404(lambda: list_manual_series_candidates(request.user, query, page))
         context.update(
             candidates=candidates,
             query=query,
@@ -182,7 +182,7 @@ def _recurring_merge_selection(raw_merge, grouping_series):
 def recurring_review(request):
     if request.method == "POST":
         return _handle_recurring_post(request)
-    _service_or_404(lambda: refresh_recurring_series(request.user, only_if_changed=True))
+    service_or_404(lambda: refresh_recurring_series(request.user, only_if_changed=True))
     own = list(
         visible_rows(RecurringSeries, request.user)
         .prefetch_related("members__transaction__account")

@@ -8,7 +8,7 @@ from django.db.models import prefetch_related_objects
 from django.urls import reverse
 from django.utils import timezone
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .access import require_person as _person
 from .access import visible_rows
 from .audit_services import owned_audience, record
@@ -427,7 +427,7 @@ def save_budget(principal, payload, *, budget=None):
     if budget is not None:
         check_can_edit(person, budget)
         if budget.scope != payload["scope"] and budget.owner_id != person.pk:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         incoming_category = payload.get("category")
         incoming_id = None if incoming_category is None else incoming_category.pk
         if budget.category_id != incoming_id:
@@ -443,9 +443,9 @@ def save_budget(principal, payload, *, budget=None):
     category = payload.get("category")
     if category is not None:
         if not Category.objects.visible_to(principal).filter(pk=category.pk).exists():
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         if assigned_household is not None and category.household_id != assigned_household.pk:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     effective_month = validate_budget_month(payload["effective_month"])
     amount_minor = payload["amount_minor"]
     if amount_minor <= 0:

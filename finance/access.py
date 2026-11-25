@@ -4,7 +4,7 @@ from django.core.exceptions import PermissionDenied
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 
-from .models import Person, _person_for
+from .models import Person, person_for
 
 DENIED = "Operation is not permitted."
 
@@ -32,7 +32,7 @@ def request_person(request, *, missing_ok=False, related=False):
 def require_person(principal, *, check_authenticated=True):
     """Require a member, retaining legacy direct-relation lookup where selected."""
     if check_authenticated:
-        person = _person_for(principal)
+        person = person_for(principal)
         if person is None:
             raise PermissionDenied(DENIED)
         return person

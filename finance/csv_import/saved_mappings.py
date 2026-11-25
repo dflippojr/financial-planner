@@ -9,11 +9,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from finance.input_limits import MAX_COLUMNS
-from finance.access import require_person as _person_for
+from finance.access import require_person
 from finance.audit_services import record
 from finance.households import current_household
 from finance.csv_import.parser import DATE_FORMATS, NUMBER_FORMATS, Mapping
-from finance.lifecycle_services import _DENIED, lock_actor_household
+from finance.lifecycle_services import lock_actor_household
+from finance.access import DENIED
 from finance.models import Account, AuditEvent, ImportBatch, SavedCsvMapping
 
 SAVED_PROFILE_PREFIX = "saved:"
@@ -156,7 +157,7 @@ def _clear_account_defaults(mapping):
 
 @transaction.atomic
 def save_csv_mapping(principal, *, name, headers, mapping, account=None, set_as_account_default=False):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     household = current_household(person)
     if household is None:
@@ -193,7 +194,7 @@ def _parsing_changed(saved, mapping: Mapping):
 
 @transaction.atomic
 def update_csv_mapping(principal, mapping_id, *, name, mapping=None, default_account_ids=None):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     saved = (
         SavedCsvMapping.objects.select_for_update()
@@ -201,7 +202,7 @@ def update_csv_mapping(principal, mapping_id, *, name, mapping=None, default_acc
         .first()
     )
     if saved is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     trimmed = (name or "").strip()
     if not trimmed:
         raise ValidationError("Name this mapping.")
@@ -233,11 +234,11 @@ def update_csv_mapping(principal, mapping_id, *, name, mapping=None, default_acc
 
 @transaction.atomic
 def set_account_default_mapping(principal, account_id, mapping_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     account = Account.objects.visible_to(person).filter(pk=account_id, status=Account.Status.ACTIVE).first()
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     previous_id = account.default_saved_csv_mapping_id
     if mapping_id is None:
         account.default_saved_csv_mapping = None
@@ -247,7 +248,7 @@ def set_account_default_mapping(principal, account_id, mapping_id):
         return account
     saved = active_saved_mappings(person).filter(pk=mapping_id).first()
     if saved is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     account.default_saved_csv_mapping = saved
     account.save(update_fields=("default_saved_csv_mapping", "updated_at"))
     if previous_id != saved.pk:
@@ -263,14 +264,14 @@ def _record_default_change(person, account, mapping_id):
 
 @transaction.atomic
 def replace_mapping_account_defaults(principal, saved, account_ids):
-    person = _person_for(principal)
+    person = require_person(principal)
     wanted = set(account_ids)
     visible = {
         account.pk: account
         for account in Account.objects.visible_to(person).filter(status=Account.Status.ACTIVE)
     }
     if wanted - set(visible):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     for account in visible.values():
         if account.pk in wanted:
             if account.default_saved_csv_mapping_id != saved.pk:
@@ -289,7 +290,7 @@ def mapping_has_batches(saved):
 
 @transaction.atomic
 def delete_or_archive_csv_mapping(principal, mapping_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     saved = (
         SavedCsvMapping.objects.select_for_update()
@@ -297,7 +298,7 @@ def delete_or_archive_csv_mapping(principal, mapping_id):
         .first()
     )
     if saved is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     _clear_account_defaults(saved)
     target_id = saved.pk
     if mapping_has_batches(saved):
