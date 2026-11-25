@@ -474,12 +474,13 @@ def _coverage_holes(batch, others, removed_ids):
     left. A batch of another source recorded the row but cannot take it; it has
     a hole while fewer active rows with the fingerprint remain on the account
     than its file held. A batch from before migration 0093 (`skipped_duplicates`
-    null) recorded nothing, so a removed row whose import-time day is inside
-    its range may be one it held: when the batch was committed after the undone
-    one, or when the row was itself re-homed here and so may have passed that
-    batch on the way. That part is best effort: nothing stored can show a row
-    such a file held outside the range the member confirmed for it. The days a
-    hole names are import-time days, the ones the batch marks covered.
+    null) recorded nothing, so every removed row whose import-time day is
+    inside its range may be one it held, and the batch is named whether it was
+    committed before or after the undone one (owner decision 2026-11-25). That
+    warns more often than needed while such batches remain, and is still best
+    effort: nothing stored can show a row such a file held outside the range
+    the member confirmed for it. The days a hole names are import-time days,
+    the ones the batch marks covered.
     """
     unknown = [other for other in others if other.skipped_duplicates is None]
     recorded = [other for other in others if other.skipped_duplicates and other.source != batch.source]
@@ -509,21 +510,13 @@ def _coverage_holes(batch, others, removed_ids):
     )
     fingerprints = {fingerprint for _pk, fingerprint, _day in removed}
     active = _active_counts_by_batch(batch.account_id, fingerprints) if recorded else {}
-    moved_before = set()
-    if any(other.pk < batch.pk for other in unknown):
-        moved_before = set(
-            TransactionCorrectionHistory.objects.filter(
-                transaction_id__in=removed_ids, field_name=TransactionCorrectionHistory.Field.IMPORT_BATCH
-            ).values_list("transaction_id", flat=True)
-        )
     holes = []
     for other in sorted(unknown + recorded, key=lambda found: found.pk):
         days = []
         if other.skipped_duplicates is None:
             days = [
-                day for pk, _fingerprint, day in removed
+                day for _pk, _fingerprint, day in removed
                 if other.date_range_start <= day <= other.date_range_end
-                and (other.pk > batch.pk or pk in moved_before)
             ]
         else:
             short = {
