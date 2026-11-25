@@ -37,10 +37,18 @@ from .reauth import (
     safe_next_url,
     stamp_recent_auth,
 )
+from .google_auth import password_sign_in_enabled
 from .security_services import client_ip, record_sign_in_failure_for_username
 
 PASSKEY_FAILED = "Sign-in failed. Check your credentials and try again later."
 REAUTH_FAILED = "Confirmation failed. Try again later."
+
+
+def _require_password_sign_in():
+    # The passkey step only ever follows a password, so production mode (#792)
+    # has no such step, even for a pending login stored before it was turned on.
+    if not password_sign_in_enabled():
+        raise Http404()
 
 
 def _json_body(request):
@@ -113,6 +121,7 @@ def passkey_require(request):
 @never_cache
 @require_http_methods(["GET", "POST"])
 def passkey_sign_in(request):
+    _require_password_sign_in()
     user = pending_passkey_user(request)
     if user is None or not hasattr(user, "person"):
         return redirect("login")
@@ -152,6 +161,7 @@ def passkey_sign_in(request):
 @require_POST
 @never_cache
 def passkey_sign_in_options(request):
+    _require_password_sign_in()
     user = pending_passkey_user(request)
     if user is None or not hasattr(user, "person"):
         return _json_error(PASSKEY_FAILED, status=403)
@@ -165,6 +175,7 @@ def passkey_sign_in_options(request):
 @require_POST
 @never_cache
 def passkey_sign_in_assert(request):
+    _require_password_sign_in()
     user = pending_passkey_user(request)
     if user is None or not hasattr(user, "person"):
         return _json_error(PASSKEY_FAILED, status=403)

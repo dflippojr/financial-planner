@@ -10,17 +10,19 @@
   <input type="hidden" name="next" value="{{ next }}">
   <button type="submit" class="btn btn-primary w-full">Sign in with Google</button>
 </form>
-<div class="divider">or</div>
+{% if password_signin_enabled %}<div class="divider">or</div>{% endif %}
 {% endif %}
+{% if password_signin_enabled %}
 <form method="post">
   {% csrf_token %}
   {% include "finance/_form_fields.html" %}
   <input type="hidden" name="next" value="{{ next }}">
   <button type="submit" class="btn btn-primary w-full">Sign in</button>
 </form>
+{% endif %}
 <p class="mt-4 text-sm">
-  <a class="link" href="{% url 'recover' %}">Recover account</a>
-  ·
+  {% if password_signin_enabled %}<a class="link" href="{% url 'recover' %}">Recover account</a>
+  ·{% endif %}
   <a class="link" href="{% url 'join' %}">Use an invitation</a>
   ·
   <a class="link" href="{% url 'privacy-policy' %}">Privacy and data policy</a>

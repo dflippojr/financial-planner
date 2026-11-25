@@ -74,7 +74,7 @@ Run the Bash commands from the deployed checkout, for example `/path/to/financia
    tailscale serve status
    ```
 
-   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto` and `X-Forwarded-For`. Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Inside the container, Serve's connections to the loopback-published port arrive from the compose network's gateway, so compose sets `TRUSTED_PROXY_IPS=default-gateway` for the app service and the app reads that address from its route table at start-up. Sign-in and session logs, and the sign-in throttle, then use the right-most `X-Forwarded-For` address (the hop Serve added). A connection from any other address, such as another container connecting directly to `app:8000`, has its `X-Forwarded-For` ignored. Anything else on the host that reaches the published port also arrives from the gateway, and so does a container that goes through `host.docker.internal` to that port (the `app` and `background` services map it to the host gateway), so the per-username sign-in limit in [authentication](authentication.md) still bounds password guessing from there. Override `TRUSTED_PROXY_IPS` in the env file only for a different proxy layout; set it to an empty value to ignore `X-Forwarded-For` entirely. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+   If `APP_PORT` is not 8000, use its value in the target URL. Tailscale Serve accepts only loopback HTTP proxy targets and supplies `X-Forwarded-Proto` and `X-Forwarded-For`. Django trusts that proxy header, redirects other HTTP requests to HTTPS, and uses secure session and CSRF cookies. Inside the container, Serve's connections to the loopback-published port arrive from the compose network's gateway, so compose sets `TRUSTED_PROXY_IPS=default-gateway` for the app service and the app reads that address from its route table at start-up. Sign-in and session logs, and the sign-in throttle, then use the right-most `X-Forwarded-For` address (the hop Serve added), or `CF-Connecting-IP` when a request carries it (see Production mode and break-glass below). A connection from any other address, such as another container connecting directly to `app:8000`, has its `X-Forwarded-For` ignored. Anything else on the host that reaches the published port also arrives from the gateway, and so does a container that goes through `host.docker.internal` to that port (the `app` and `background` services map it to the host gateway), so the per-username sign-in limit in [authentication](authentication.md) still bounds password guessing from there. Override `TRUSTED_PROXY_IPS` in the env file only for a different proxy layout; set it to an empty value to ignore `X-Forwarded-For` entirely. Open the HTTPS MagicDNS URL shown by `tailscale serve status`. The command uses Serve, not Funnel, so it does not intentionally expose the app to the public internet. See the [Tailscale Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
    **When the PC already runs other services**, check before choosing ports:
 
@@ -109,6 +109,20 @@ Run the Bash commands from the deployed checkout, for example `/path/to/financia
    ```bash
    docker compose --env-file "$Config" exec app python manage.py seed_first_user --username USERNAME --display-name "DISPLAY NAME" --household "HOUSEHOLD NAME"
    ```
+
+## Production mode and break-glass
+
+Set `GOOGLE_ONLY_SIGN_IN=true` in `production.env` once Google sign-in works and every member has connected Google, then recreate the app container the same way as for `SETUP_CODE`. Google is then the only way in and no password is accepted anywhere; [authentication](authentication.md#production-mode-google-only-sign-in) lists what changes. The app refuses to start with the flag on while `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` is empty, and with any value other than `true` or `false`. To go back, set it to `false` and recreate the app; stored passwords and recovery codes work again.
+
+When a member cannot sign in, run the break-glass command on the basement PC. It works with production mode on or off:
+
+```bash
+docker compose --env-file "$Config" exec app python manage.py break_glass_sign_in --username USERNAME
+```
+
+It prints a one-time path such as `/break-glass/<token>/`. Open it on the tailnet address (`https://basement-pc.example-tailnet.ts.net/break-glass/<token>/`) within 15 minutes and press **Sign in**. Add `--unlink-google` when the member's Google account is lost or compromised, so they can connect another one on **Sign-in & security** after signing in. Running the command signs the member out on every device, and using the link does so again before it starts the new session. The link works once, a new link cancels the earlier one, and it is refused through the public tunnel: a request that carries `CF-Connecting-IP` gets 404. The tunnel should also block `/break-glass/` (#794). The printed path is a secret until used; do not paste it into an issue or a chat.
+
+`TRUSTED_PROXY_IPS` must include the address the cloudflared connector connects from (#794 sets it up). From a listed address the app takes the visitor's address from `CF-Connecting-IP`, and without that header from the right-most `X-Forwarded-For` hop; from any other address it ignores both. When cloudflared runs on the host and reaches the loopback-published port, it arrives from the same compose gateway as Tailscale Serve, which the default `default-gateway` already lists.
 
 ## Google Cloud Console (optional sign-in)
 

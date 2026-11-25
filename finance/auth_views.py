@@ -42,11 +42,15 @@ from .forms import (
     SetupForm,
     SetupGoogleForm,
 )
+from .break_glass import break_glass_throttle_key, break_glass_token_is_usable, redeem_break_glass_token
 from .google_auth import (
+    GOOGLE_ONLY_NOTICE,
     disconnect_google_account,
     google_signin_enabled,
     google_throttle_key,
     has_usable_google_sign_in,
+    has_usable_password_sign_in,
+    password_sign_in_enabled,
     remove_member_password,
     store_google_pending,
     username_is_taken,
@@ -86,8 +90,11 @@ def _authenticate_member(request, username, password, key):
     throttle: recording one for a request that was already blocked would let
     a caller reset record_login_failure's window (and clear blocked_until)
     simply by retrying, before the block is meant to expire.
+
+    Every password check in the app goes through here, so production mode
+    (#792) answers None before the password is looked at.
     """
-    if login_is_blocked(key):
+    if not password_sign_in_enabled() or login_is_blocked(key):
         return None
     user = authenticate(request, username=username, password=password)
     if user is not None and not hasattr(user, "person"):
@@ -126,6 +133,18 @@ def _privacy_policy_page_context(*, wide=True):
 def sign_in(request):
     if not first_member_exists():
         return redirect("setup")
+    if request.method == "POST" and not password_sign_in_enabled():
+        return render(
+            request,
+            "finance/login.html",
+            {
+                "form": LoginForm(),
+                "next": request.POST.get("next", ""),
+                "auth_error": GOOGLE_ONLY_NOTICE,
+                **_privacy_policy_page_context(wide=False),
+            },
+            status=403,
+        )
     form = LoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         username = normalize_username(form.cleaned_data["username"])
@@ -267,6 +286,8 @@ def account_disconnect_google(user):
 
 
 def account_add_password(request, password_form):
+    if not password_sign_in_enabled():
+        return password_form, GOOGLE_ONLY_NOTICE
     if not password_form.is_valid():
         return password_form, None
     had_password = request.user.has_usable_password()
@@ -395,11 +416,14 @@ def join(request):
     form = JoinForm()
     google_form = JoinGoogleForm()
     recovery_codes = None
+    status = 200
     if request.method == "POST" and request.POST.get("intent") == "google":
         google_form = JoinGoogleForm(request.POST)
         started = _start_google_join(request, google_form)
         if started is not None:
             return started
+    elif request.method == "POST" and not password_sign_in_enabled():
+        status = 403
     elif request.method == "POST":
         form = JoinForm(request.POST)
         if form.is_valid():
@@ -428,6 +452,7 @@ def join(request):
             "recovery_codes": recovery_codes,
             **_privacy_policy_page_context(),
         },
+        status=status,
     )
 
 
@@ -442,6 +467,7 @@ def setup(request):
     form = SetupForm()
     google_form = SetupGoogleForm()
     recovery_codes = None
+    status = 200
     if not configured:
         return render(
             request,
@@ -459,6 +485,8 @@ def setup(request):
         started = _start_google_setup(request, google_form)
         if started is not None:
             return started
+    elif request.method == "POST" and not password_sign_in_enabled():
+        status = 403
     elif request.method == "POST":
         form = SetupForm(request.POST)
         created_codes = _complete_password_setup(request, form)
@@ -474,6 +502,7 @@ def setup(request):
             "setup_configured": True,
             **_privacy_policy_page_context(),
         },
+        status=status,
     )
 
 
@@ -503,7 +532,7 @@ def _reauth_context(request, form, auth_error=None):
         "next": next_url,
         "action": action,
         "action_label": action_label(action),
-        "show_password": request.user.has_usable_password(),
+        "show_password": has_usable_password_sign_in(request.user),
         "show_google": has_usable_google_sign_in(request.user),
         "show_passkey": bool(
             getattr(request.user, "person", None) and request.user.person.passkeys.exists()
@@ -514,10 +543,10 @@ def _reauth_context(request, form, auth_error=None):
 
 
 
-def _render_reauth(request, form=None, auth_error=None):
+def _render_reauth(request, form=None, auth_error=None, status=200):
     if form is None:
         form = ReauthPasswordForm()
-    return render(request, "finance/reauth.html", _reauth_context(request, form, auth_error))
+    return render(request, "finance/reauth.html", _reauth_context(request, form, auth_error), status=status)
 
 
 
@@ -527,6 +556,8 @@ def reauth(request):
     form = ReauthPasswordForm(request.POST or None)
     if request.method != "POST":
         return _render_reauth(request, form)
+    if not password_sign_in_enabled():
+        return _render_reauth(request, ReauthPasswordForm(), REAUTH_FAILED, status=403)
     if not request.user.has_usable_password():
         return _render_reauth(request, ReauthPasswordForm(), REAUTH_FAILED)
     key = throttle_key(request.user.username, client_ip(request))
@@ -565,6 +596,9 @@ RECOVERY_FAILED = "Recovery failed. Check the supplied details."
 @login_not_required
 @never_cache
 def recover(request):
+    if not password_sign_in_enabled():
+        # Recovery only sets a password, which signs nobody in here (#792).
+        raise Http404()
     form = RecoveryForm(request.POST or None)
     recovered = False
     if request.method == "POST" and form.is_valid():
@@ -590,3 +624,39 @@ def recover(request):
                 record_security_event(recovered_user, EVENT_TYPES.RECOVERY_CODE_USED, request=request)
                 record_security_event(recovered_user, EVENT_TYPES.PASSWORD_CHANGED, request=request)
     return render(request, "finance/recover.html", {"form": form, "recovered": recovered})
+
+
+
+@login_not_required
+@never_cache
+@require_http_methods(["GET", "POST"])
+def break_glass(request, token):
+    """Sign a member in with the one-time link `manage.py break_glass_sign_in` printed (#792).
+
+    Cloudflare sets CF-Connecting-IP on every request it forwards and a visitor
+    cannot remove it, so a request carrying it came through the public tunnel
+    and is refused: the link works on the tailnet only. Every refusal is the
+    same 404.
+    """
+    if "HTTP_CF_CONNECTING_IP" in request.META:
+        raise Http404()
+    key = break_glass_throttle_key(client_ip(request))
+    if login_is_blocked(key):
+        raise Http404()
+    if request.method == "GET":
+        # Opening the link changes nothing, so a link preview cannot use it up.
+        if not break_glass_token_is_usable(token):
+            record_login_failure(key)
+            raise Http404()
+        return render(request, "finance/break_glass.html", {"auth_card_layout": True})
+    user = redeem_break_glass_token(token)
+    if user is None:
+        record_login_failure(key)
+        raise Http404()
+    clear_login_failures(key)
+    # Redeeming ended every session of the member, this browser's included,
+    # so start from an empty session with a new key.
+    request.session.flush()
+    _complete_member_session(request, user)
+    record_security_event(user, EVENT_TYPES.BREAK_GLASS_SIGN_IN, request=request)
+    return redirect("account-settings")

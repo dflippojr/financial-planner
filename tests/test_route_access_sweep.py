@@ -825,6 +825,7 @@ EXEMPT_ROUTES = {
     "setup": "first-run setup; refuses once a member exists",
     "join": "accepts a household invitation for the signed-in member",
     "recover": _SIGN_IN,
+    "break-glass": "one-time link from the host command; the token names the member, tests/test_break_glass.py",
     "reauth": _SIGN_IN,
     "reauth-google": _SIGN_IN,
     "passkey-reauth-options": _SIGN_IN,

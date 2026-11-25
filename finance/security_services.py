@@ -62,20 +62,30 @@ def _is_trusted_proxy(remote_addr):
     return any(address in network for network in getattr(settings, "TRUSTED_PROXY_IPS", ()))
 
 
+def _forwarded_address(value):
+    try:
+        return str(ipaddress.ip_address(value.strip()))[:45]
+    except ValueError:
+        return None
+
+
 def client_ip(request):
-    # Anything that can reach the app port can send X-Forwarded-For, so the
-    # header counts only on a connection from the configured proxy. The
-    # right-most hop is the one that proxy appended.
+    # Anything that can reach the app port can send CF-Connecting-IP and
+    # X-Forwarded-For, so both count only on a connection from an address in
+    # TRUSTED_PROXY_IPS (Tailscale Serve, the cloudflared connector). From
+    # there, CF-Connecting-IP names the visitor Cloudflare saw; without it,
+    # the right-most X-Forwarded-For hop is the one that proxy appended. The
+    # first header present decides, and a malformed value (an empty one too)
+    # falls back to the connecting address rather than to the other header.
     if request is None:
         return ""
     remote_addr = request.META.get("REMOTE_ADDR") or ""
     if _is_trusted_proxy(remote_addr):
+        if "HTTP_CF_CONNECTING_IP" in request.META:
+            return _forwarded_address(request.META["HTTP_CF_CONNECTING_IP"] or "") or remote_addr[:45]
         parts = [part.strip() for part in (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",") if part.strip()]
         if parts:
-            try:
-                return str(ipaddress.ip_address(parts[-1]))[:45]
-            except ValueError:
-                pass
+            return _forwarded_address(parts[-1]) or remote_addr[:45]
     return remote_addr[:45]
 
 
