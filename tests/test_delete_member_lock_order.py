@@ -308,3 +308,63 @@ def test_no_account_lock_after_the_first_pass_reaches_a_new_account():
     assert len(account_locks) > 2, "the exit and delete_account lock accounts again"
     assert all(ids <= touched for ids in account_locks[1:])
     assert not Person.objects.filter(pk=leaver.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_link_committed_between_the_read_and_the_lock_restarts_the_first_pass():
+    """Review r1 on #811: an undo restores a link from the leaver's account P to shared C (C < P) in that window.
+
+    The deletion must not then take C after P. It starts again with C and P in
+    one first pass, and every later account lock stays inside it.
+    """
+    _require_postgres()
+    leaver = make_person("leaver")
+    member = make_person("member")
+    household = make_household(leaver, member)
+    shared = make_account(member, name="Member Shared", scope=Account.Scope.HOUSEHOLD, household=household)
+    private = make_account(leaver, name="Leaver Checking")
+    assert shared.pk < private.pk
+    marked = make_transaction(member, shared, transaction_date=AUGUST, amount_minor=-7_000,
+                              description="SYNTHETIC MARKED PURCHASE")
+    marked_refund = make_transaction(leaver, private, transaction_date=AUGUST, amount_minor=2_000,
+                                     description="SYNTHETIC MARKED REFUND")
+    link_refund(leaver, marked_refund.pk, marked.pk)
+    _preview, undo = apply_bulk_edit(
+        member, matching=Transaction.objects.none(), transaction_ids=[marked.pk], action=ACTION_MARK_UNTRACKED,
+    )
+    leave_household(leaver)
+    # Nothing links the leaver's account to the household now, so the first read finds only P.
+    assert not RefundLink.objects.exists()
+
+    calls = []
+    errors = []
+    original = lifecycle_services._lock_accounts_in_pk_order
+
+    def undo_in_its_own_transaction():
+        try:
+            undo_bulk_edit(member, undo.pk)
+        except Exception as exc:  # noqa: BLE001 - reported to the test thread
+            errors.append(exc)
+        finally:
+            connections.close_all()
+
+    def record(account_ids):
+        ids = set(account_ids)
+        if not calls:
+            worker = threading.Thread(target=undo_in_its_own_transaction, daemon=True)
+            worker.start()
+            worker.join(timeout=JOIN_SECONDS)
+            assert not worker.is_alive(), "the undo did not finish"
+        calls.append(ids)
+        return original(ids)
+
+    with patch.object(lifecycle_services, "_lock_accounts_in_pk_order", record):
+        delete_member_data(leaver)
+
+    assert errors == []
+    assert calls[0] == {private.pk}
+    assert calls[1] == {shared.pk, private.pk}
+    assert all(ids <= {shared.pk, private.pk} for ids in calls[2:])
+    assert not Person.objects.filter(pk=leaver.pk).exists()
+    assert not Transaction.objects.get(pk=marked.pk).untracked_transfer
+    assert not RefundLink.objects.exists()
