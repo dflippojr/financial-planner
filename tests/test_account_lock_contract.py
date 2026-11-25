@@ -19,6 +19,8 @@ Static only; no database.
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = Path("finance/account_locks.py")
 
@@ -83,37 +85,42 @@ def _is_model_root(root):
     return isinstance(root, ast.Call) and isinstance(root.func, ast.Name) and root.func.id == "get_user_model"
 
 
+def _scan_source(relative, source):
+    """Yield (module, function, line, kind) for each select_for_update in one module's source that may lock an Account."""
+    tree = ast.parse(source)
+    functions = {}
+    for function in ast.walk(tree):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for inner in ast.walk(function):
+                functions[id(inner)] = function.name
+    seen = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        calls, root = _chain(node)
+        locks = [call for call in calls if isinstance(call.func, ast.Attribute) and call.func.attr == "select_for_update"]
+        if not locks or id(locks[0]) in seen:
+            continue
+        seen.add(id(locks[0]))
+        lock = locks[0]
+        where = (relative, functions.get(id(lock), "<module>"))
+        if _is_account_chain(calls, root):
+            yield (*where, lock.lineno, "account")
+        elif _joins_an_account(calls) and not any(keyword.arg == "of" for keyword in lock.keywords):
+            yield (*where, lock.lineno, "joined account")
+        elif not _is_model_root(root) and not any(
+            isinstance(call.func, ast.Name) and call.func.id == "visible_rows" for call in calls
+        ):
+            yield (*where, lock.lineno, "generic")
+
+
 def _locks():
     """Yield (module, function, line, kind) for every select_for_update that may lock an Account outside the helper."""
     for path in sorted((ROOT / "finance").rglob("*.py")):
         relative = path.relative_to(ROOT)
         if "migrations" in relative.parts or relative == HELPER:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        functions = {}
-        for function in ast.walk(tree):
-            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for inner in ast.walk(function):
-                    functions[id(inner)] = function.name
-        seen = set()
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            calls, root = _chain(node)
-            locks = [call for call in calls if isinstance(call.func, ast.Attribute) and call.func.attr == "select_for_update"]
-            if not locks or id(locks[0]) in seen:
-                continue
-            seen.add(id(locks[0]))
-            lock = locks[0]
-            where = (relative.as_posix(), functions.get(id(lock), "<module>"))
-            if _is_account_chain(calls, root):
-                yield (*where, lock.lineno, "account")
-            elif _joins_an_account(calls) and not any(keyword.arg == "of" for keyword in lock.keywords):
-                yield (*where, lock.lineno, "joined account")
-            elif not _is_model_root(root) and not any(
-                isinstance(call.func, ast.Name) and call.func.id == "visible_rows" for call in calls
-            ):
-                yield (*where, lock.lineno, "generic")
+        yield from _scan_source(relative.as_posix(), path.read_text(encoding="utf-8"))
 
 
 def test_account_rows_are_locked_only_through_lock_accounts():
@@ -159,3 +166,30 @@ def test_the_scanner_sees_each_kind_of_account_lock():
     assert kinds == {"account": "account", "visible": "account", "multiline": "account",
                      "joined": "joined account", "generic": "generic"}
     assert not _joins_an_account(_chain(ast.parse("T.objects.select_related('category')", mode="eval").body)[0])
+
+
+# Concurrency review r1 at ba14aa3 (#811 comment 7173541959): shapes the
+# scanner must reject. Each is scanned as a new module in finance/.
+REVIEW_SHAPES = {
+    "aliased Account import": (
+        "from finance.models import Account as BankAccount\n"
+        "def lock():\n"
+        "    return BankAccount.objects.select_for_update().filter(pk=1)\n"
+    ),
+    "empty of= with an account join": (
+        "from finance.models import Transaction\n"
+        "def lock():\n"
+        "    return Transaction.objects.select_for_update(of=()).select_related('account').first()\n"
+    ),
+    "filter join to Account": (
+        "from finance.models import Transaction\n"
+        "def lock():\n"
+        "    return Transaction.objects.select_for_update().filter(account__owner_id=1).first()\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(REVIEW_SHAPES))
+def test_the_review_shapes_are_rejected(shape):
+    hits = list(_scan_source("finance/new_service.py", REVIEW_SHAPES[shape]))
+    assert [kind for _module, _function, _line, kind in hits if kind != "generic"], (shape, hits)
