@@ -6,7 +6,7 @@
 {% if has_accounts %}
 <section class="card bg-base-100 shadow-sm max-w-lg">
   <div class="card-body">
-    <form method="post">
+    <form method="post" data-pending-label="Saving…">
       {% csrf_token %}
       {% include "finance/_form_fields.html" with form=form %}
       <div class="flex flex-wrap gap-2">

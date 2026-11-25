@@ -3,6 +3,8 @@ from urllib.parse import quote
 
 from django.utils.html import strip_tags
 
+from finance.storable_text import storable_text
+
 CLAIM_COMPROMISED = (
     "That setup token was already used or is not valid. "
     "If you did not claim it in this app, treat it as compromised and disable it at SimpleFIN."
@@ -17,8 +19,7 @@ def claim_compromised_message():
 
 def clean_text(value) -> str:
     """Provider text as storable UTF-8: lone surrogates become "?" and NULs are dropped."""
-    text = value if isinstance(value, str) else str(value)
-    return text.encode("utf-8", "replace").decode("utf-8").replace("\x00", "")
+    return storable_text(value)
 
 
 def sanitize_provider_message(message: str) -> str:

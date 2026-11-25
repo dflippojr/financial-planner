@@ -1,6 +1,7 @@
 import csv
 import io
 import zipfile
+from html.parser import HTMLParser
 from datetime import date, timedelta
 
 import pytest
@@ -478,3 +479,57 @@ def test_entry_takes_household_tags_and_refuses_bad_input():
     with pytest.raises(ValidationError):
         add(note="x" * 2001)
     assert Transaction.objects.filter(account=account).count() == 1
+
+
+class _FormScan(HTMLParser):
+    """Collect each form's attributes and the fields and submit buttons between its open and close tags."""
+
+    def __init__(self):
+        super().__init__()
+        self.forms = []
+        self._form = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "form":
+            self._form = {"attrs": attributes, "fields": set(), "buttons": []}
+            self.forms.append(self._form)
+        elif self._form is None:
+            return
+        elif tag in {"input", "textarea", "select"} and attributes.get("name"):
+            self._form["fields"].add(attributes["name"])
+        elif tag == "button" and attributes.get("type", "submit") == "submit":
+            self._form["buttons"].append(attributes)
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self._form = None
+
+
+@pytest.mark.django_db
+def test_add_form_opts_in_to_the_shared_double_submit_guard():
+    # #800: static/js/page-actions.js refuses a second submit only on forms with data-pending-label.
+    owner = make_person("owner")
+    make_account(owner)
+    scan = _FormScan()
+    scan.feed(signed_in(owner).get(reverse("transaction-add")).content.decode())
+
+    [entry_form] = [form for form in scan.forms if "description" in form["fields"]]
+    assert entry_form["attrs"].get("method") == "post"
+    assert entry_form["attrs"].get("data-pending-label")
+    # Both submit buttons, "Add transaction" and "Add and enter another", sit inside the guarded form.
+    assert [button.get("name") for button in entry_form["buttons"]] == [None, "add_another"]
+
+
+@pytest.mark.django_db
+def test_same_entry_posted_again_after_the_first_save_adds_a_second_row():
+    # Two identical cash entries can be real; the guard must not turn into server-side deduplication.
+    owner = make_person("owner")
+    account = make_account(owner)
+    client = signed_in(owner)
+
+    first = client.post(reverse("transaction-add"), add_payload(account, add_another="1"))
+    second = client.post(reverse("transaction-add"), add_payload(account))
+
+    assert (first.status_code, second.status_code) == (302, 302)
+    assert Transaction.objects.filter(account=account, description="SYNTHETIC GROCER").count() == 2
