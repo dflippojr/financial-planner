@@ -272,19 +272,51 @@ def dropped_refund_links(original_ids):
     """The links of these originals, as `restore_dropped_refund_links` takes them back.
 
     Read under the originals' row locks, before the mark drops them (#797).
-    Each link keeps the marked pairs that touched its original or refund then,
+    Each link keeps its `RefundLinkDrop` rows exactly as they stand, for undo to
+    put back verbatim, and the marked pairs that touch its original or refund,
     so undo can tell a pair that came later from one that was already there.
     """
     links = list(
         RefundLink.objects.filter(original_id__in=original_ids)
         .order_by("pk")
-        .values("refund_id", "original_part_id", "original_id")
+        .values("pk", "refund_id", "original_part_id", "original_id")
     )
+    drops = {}
+    for link_id, person_id, pair_id in (
+        RefundLinkDrop.objects.filter(link_id__in=[link["pk"] for link in links])
+        .order_by("link_id", "person_id", "pair_id")
+        .values_list("link_id", "person_id", "pair_id")
+    ):
+        drops.setdefault(link_id, []).append([person_id, pair_id])
     for link in links:
+        link_id = link.pop("pk")
         original_id = link.pop("original_id")
+        link["drops"] = drops.get(link_id, [])
         touching = _marked_pairs_touching((original_id, link["refund_id"]))
         link["marked_pair_ids"] = sorted(touching.values_list("pk", flat=True))
     return links
+
+
+def _restore_drops(link, saved_drops, actor):
+    """Put back the stored drops whose pair still exists and still leaves its legs out.
+
+    Owner decision via the liaison on #809: the drops come back as they were,
+    never re-derived under today's viewer rules. A drop whose pair has since
+    been undone, dismissed or deleted is not restored, as unmarking that pair
+    would have cleared it. Each member with a drop gets a "linked" -> "unlinked"
+    history row `only_for` them after the restore's "unlinked" -> "linked" row,
+    as the pair rule writes it, so their history ends unlinked.
+    """
+    pair_ids = {pair_id for _person_id, pair_id in saved_drops}
+    still_marked = set(_marked_pairs_touching((link.original_id,)).filter(pk__in=pair_ids).values_list("pk", flat=True))
+    restored_for = set()
+    for person_id, pair_id in saved_drops:
+        if pair_id not in still_marked:
+            continue
+        RefundLinkDrop.objects.create(link=link, person_id=person_id, pair_id=pair_id)
+        if person_id not in restored_for:
+            restored_for.add(person_id)
+            _record_member_link_history(link.refund, actor, person_id, "linked", "unlinked")
 
 
 def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
@@ -292,27 +324,22 @@ def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
 
     Owner decision on #679: undoing a bulk untracked-transfer mark is a full
     undo. `saved_links` are the links the mark dropped, each with the refund's
-    `updated_at` read after the drop and the marked pairs touching either row
-    then. A link comes back only when nothing has moved since: the refund is
-    still active, unlinked and unedited, a split part still exists, and no
-    marked pair touches either row that did not touch it at the mark. Any other
-    link is skipped, so the refund keeps counting as income, and the undo goes
-    on: a refusal would tell the actor that a row they may not see has changed.
-    A restored link whose original is a leg of a pair marked before the bulk
-    mark gets that pair's viewer rule again, as `link_refund` applies it, so
-    each viewer who saw it dropped before the mark sees it dropped again.
-    The caller holds the row locks of `original` and of every refund in
-    `refunds_by_id`, and has already unmarked `original`. Returns the number
-    of links restored.
+    `updated_at` read after the drop, its `RefundLinkDrop` rows and the marked
+    pairs touching either row then. A link comes back only when nothing has
+    moved since: the refund is still active, unlinked and unedited, a split part
+    still exists, and no marked pair touches either row that did not touch it at
+    the mark. Any other link is skipped, so the refund keeps counting as income,
+    and the undo goes on: a refusal would tell the actor that a row they may not
+    see has changed. A restored link gets its stored drops back verbatim
+    (`_restore_drops`). The caller holds the row locks of `original` and of
+    every refund in `refunds_by_id`, and has already unmarked `original`.
+    Returns the number of links restored.
     """
     if not saved_links:
         return 0
     refund_ids = [item["refund_id"] for item in saved_links]
     linked = set(RefundLink.objects.filter(refund_id__in=refund_ids).values_list("refund_id", flat=True))
     part_ids = set(TransactionSplit.objects.filter(transaction=original).values_list("pk", flat=True))
-    original_pairs = list(
-        _marked_pairs_touching((original.pk,)).select_related("leg_a__account", "leg_b__account").order_by("pk")
-    )
     restored = 0
     for item in saved_links:
         refund = refunds_by_id.get(item["refund_id"])
@@ -329,8 +356,7 @@ def restore_dropped_refund_links(original, saved_links, refunds_by_id, actor):
             continue
         link = RefundLink.objects.create(refund=refund, original=original, original_part_id=part_id)
         record_text_history(refund, actor, TransactionCorrectionHistory.Field.REFUND_LINK, "unlinked", "linked")
-        for pair in original_pairs:
-            drop_refund_links_for_pair([link], pair, (pair.leg_a, pair.leg_b), actor)
+        _restore_drops(link, item.get("drops", []), actor)
         restored += 1
     if restored:
         restore_refund_categories(original, actor)
