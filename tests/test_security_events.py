@@ -245,6 +245,36 @@ def test_client_ip_honors_forwarded_for_only_from_a_trusted_proxy(remote, forwar
         assert client_ip(request) == expected
 
 
+# (connecting address, CF-Connecting-IP, X-Forwarded-For, trusted proxies, the address the app sees)
+CONNECTOR = "172.18.0.9"
+CONNECTOR_CLIENT_IP_CASES = {
+    "connector-header": (CONNECTOR, "198.51.100.7", None, CONNECTOR, "198.51.100.7"),
+    "connector-header-wins-over-forwarded-for": (CONNECTOR, "198.51.100.7", "192.0.2.60", CONNECTOR, "198.51.100.7"),
+    "connector-ipv6-header": (CONNECTOR, "2001:DB8::7", None, CONNECTOR, "2001:db8::7"),
+    "connector-in-trusted-network": (CONNECTOR, "198.51.100.7", None, "172.18.0.0/24", "198.51.100.7"),
+    "no-connector-header-falls-back-to-forwarded-for": (CONNECTOR, None, "198.51.100.1, 192.0.2.60", CONNECTOR, "192.0.2.60"),
+    "untrusted-peer-with-both-headers": ("203.0.113.20", "198.51.100.7", "192.0.2.60", CONNECTOR, "203.0.113.20"),
+    "no-trusted-proxy": ("203.0.113.20", "198.51.100.7", "192.0.2.60", "", "203.0.113.20"),
+    "invalid-connector-header": (CONNECTOR, "not-an-ip", None, CONNECTOR, CONNECTOR),
+    "invalid-connector-header-ignores-forwarded-for": (CONNECTOR, "198.51.100.7, 192.0.2.1", "192.0.2.60", CONNECTOR, CONNECTOR),
+}
+
+
+@pytest.mark.parametrize(
+    ("remote", "connecting", "forwarded", "trusted", "expected"),
+    CONNECTOR_CLIENT_IP_CASES.values(),
+    ids=CONNECTOR_CLIENT_IP_CASES.keys(),
+)
+def test_client_ip_honors_cf_connecting_ip_only_from_a_trusted_connector(
+    remote, connecting, forwarded, trusted, expected
+):
+    request = _client_ip_request(remote=remote, forwarded=forwarded)
+    if connecting is not None:
+        request.META["HTTP_CF_CONNECTING_IP"] = connecting
+    with override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies(trusted) if trusted else ()):
+        assert client_ip(request) == expected
+
+
 @pytest.mark.django_db
 @override_settings(TRUSTED_PROXY_IPS=parse_trusted_proxies("127.0.0.1"))
 def test_sign_in_log_does_not_trust_spoofed_forwarded_for():

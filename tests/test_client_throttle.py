@@ -349,6 +349,50 @@ def test_forwarded_for_from_an_untrusted_address_cannot_buy_a_fresh_bucket():
     assert "_auth_user_id" not in spoofed.session
 
 
+def _client_through_connector(address, *, connector=PROXY_ADDRESS):
+    return Client(REMOTE_ADDR=connector, HTTP_CF_CONNECTING_IP=address)
+
+
+@pytest.mark.django_db
+@THROTTLE_SETTINGS
+def test_clients_behind_the_cloudflare_connector_are_throttled_by_cf_connecting_ip():
+    # Every public visitor arrives from the connector's address (#792).
+    user, _person, _household = make_member()
+    for _attempt in range(2):
+        _client_through_connector("198.51.100.7").post(
+            reverse("login"), {"username": user.username, "password": "wrong"}
+        )
+
+    blocked = _client_through_connector("198.51.100.7")
+    refused = blocked.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+    other = _client_through_connector("198.51.100.8")
+    accepted = other.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    assert b"Sign-in failed" in refused.content
+    assert "_auth_user_id" not in blocked.session
+    assert accepted.status_code == 302
+    assert other.session["_auth_user_id"] == str(user.pk)
+    assert login_is_blocked(throttle_key(user.username, "198.51.100.7"))
+    assert not login_is_blocked(throttle_key(user.username, PROXY_ADDRESS))
+
+
+@pytest.mark.django_db
+@THROTTLE_SETTINGS
+def test_cf_connecting_ip_from_an_untrusted_address_cannot_buy_a_fresh_bucket():
+    user, _person, _household = make_member()
+    for index in range(2):
+        _client_through_connector(f"198.51.100.{index + 20}", connector="172.18.0.7").post(
+            reverse("login"), {"username": user.username, "password": "wrong"}
+        )
+
+    spoofed = _client_through_connector("198.51.100.99", connector="172.18.0.7")
+    blocked = spoofed.post(reverse("login"), {"username": user.username, "password": PASSWORD})
+
+    assert b"Sign-in failed" in blocked.content
+    assert "_auth_user_id" not in spoofed.session
+    assert login_is_blocked(throttle_key(user.username, "172.18.0.7"))
+
+
 def _fail_from_rotating_clients(username, count):
     for index in range(count):
         _client_at(f"100.64.1.{index + 1}").post(reverse("login"), {"username": username, "password": "wrong"})
