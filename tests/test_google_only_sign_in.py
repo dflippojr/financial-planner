@@ -47,7 +47,9 @@ def test_production_mode_is_off_by_default():
     ("value", "client_id", "secret", "expected"),
     [
         ("", "", "", False),
+        ("   ", "", "", False),
         ("false", "id", "secret", False),
+        (" False ", "", "", False),
         ("true", "id", "secret", True),
         (" TRUE ", "id", "secret", True),
     ],
@@ -61,6 +63,13 @@ def test_production_mode_without_google_credentials_stops_start_up(client_id, se
     # Otherwise the app would start with no way to sign in at all.
     with pytest.raises(ImproperlyConfigured, match="GOOGLE_ONLY_SIGN_IN"):
         google_only_sign_in_from_env("true", client_id, secret)
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "0", "on", "off", "ture", "true,", "enabled", "no"])
+def test_an_unrecognized_production_mode_value_stops_start_up(value):
+    # A typo must not leave passwords on without anybody noticing.
+    with pytest.raises(ImproperlyConfigured, match="GOOGLE_ONLY_SIGN_IN"):
+        google_only_sign_in_from_env(value, "id", "secret")
 
 
 @pytest.mark.django_db

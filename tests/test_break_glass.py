@@ -1,8 +1,10 @@
-"""Break-glass for production mode (#792): a host command, never a password form.
+"""Break-glass (#792): a host command, never a password form.
 
-`manage.py break_glass_sign_in` prints a one-time link for one member. The
-link is the only way in besides Google, exists only after the command ran on
-the host, and is refused for any request that came through Cloudflare.
+`manage.py break_glass_sign_in` prints a one-time link for one member, with
+production mode on or off. In production mode the link is the only way in
+besides Google. It exists only after the command ran on the host, is refused
+for any request that came through Cloudflare, and issuing or using it ends
+the member's earlier sessions and unfinished sign-ins.
 """
 
 import re
@@ -19,10 +21,16 @@ from django.utils import timezone
 from allauth.socialaccount.models import SocialAccount
 
 from finance.break_glass import locked_grant_for_redeeming
-from finance.models import AuditEvent, BreakGlassGrant, LoginThrottle, MemberSecurityEvent
+from finance.models import AuditEvent, BreakGlassGrant, LoginThrottle, MemberSecurityEvent, PendingSignInSession
 from finance.reauth import RECENT_AUTH_SESSION_KEY
 from tests.test_auth_flows import make_member
 from tests.test_google_auth import GOOGLE_SUB, _finish_google, _google_settings, _id_token
+from tests.test_session_hygiene import (
+    PASSKEY_SETTINGS,
+    _pending_passkey,
+    _require_passkey_after_password,
+    _signed_in_without_passkey,
+)
 
 EVENT_TYPES = MemberSecurityEvent.EventType
 LINK = re.compile(r"/break-glass/([A-Za-z0-9_-]{40,})/")
@@ -209,28 +217,95 @@ def test_the_link_is_refused_for_a_request_that_came_through_cloudflare():
 
 
 @pytest.mark.django_db
+def test_the_command_and_its_link_work_with_passwords_on():
+    # Owner decision 2026-11-25 on #792: break-glass works in both modes.
+    user, person, _household = make_member()
+
+    path, _token = _issue(user.username)
+    client = Client()
+
+    assert client.get(path).status_code == 200
+    assert client.post(path).status_code == 302
+    assert client.session["_auth_user_id"] == str(user.pk)
+    assert MemberSecurityEvent.objects.filter(member=person, event_type=EVENT_TYPES.BREAK_GLASS_SIGN_IN).count() == 1
+
+
+@pytest.mark.django_db
 @_google_only()
-def test_the_link_stops_working_when_production_mode_is_turned_off():
+def test_a_link_issued_in_production_mode_still_works_after_the_mode_is_turned_off():
     user, _person, _household = make_member()
     path, _token = _issue(user.username)
     client = Client()
 
     with override_settings(GOOGLE_ONLY_SIGN_IN=False):
-        assert client.get(path).status_code == 404
-        assert client.post(path).status_code == 404
+        assert client.get(path).status_code == 200
+        assert client.post(path).status_code == 302
 
-    assert "_auth_user_id" not in client.session
+    assert client.session["_auth_user_id"] == str(user.pk)
 
 
 @pytest.mark.django_db
-def test_the_command_is_refused_outside_production_mode():
-    # With passwords on, recovery codes are the way back in.
+@_google_only()
+def test_issuing_a_link_signs_the_member_out_everywhere_and_the_new_link_starts_a_fresh_session():
+    user, _person, _household = make_member("locked-out")
+    other, _other_person, _other_household = make_member("other")
+    earlier = _signed_in_without_passkey(user)
+    bystander = _signed_in_without_passkey(other)
+
+    path, _token = _issue(user.username)
+
+    assert earlier.get(reverse("home")).status_code == 302
+    assert "_auth_user_id" not in earlier.session
+    assert bystander.get(reverse("home")).status_code == 200
+    fresh = Client()
+    assert fresh.post(path).status_code == 302
+    assert fresh.session["_auth_user_id"] == str(user.pk)
+    assert fresh.get(reverse("home")).status_code == 200
+    # The earlier browser stays signed out after the link is used.
+    assert earlier.get(reverse("home")).status_code == 302
+
+
+@PASSKEY_SETTINGS
+@pytest.mark.django_db
+def test_issuing_a_link_ends_an_unfinished_sign_in():
+    user, _person, _household = make_member("locked-out")
+    other, _other_person, _other_household = make_member("other")
+    _require_passkey_after_password(user)
+    _require_passkey_after_password(other)
+    _pending_passkey(user)
+    _pending_passkey(other)
+
+    _issue(user.username)
+
+    assert not PendingSignInSession.objects.filter(user=user).exists()
+    assert PendingSignInSession.objects.filter(user=other).exists()
+
+
+@pytest.mark.django_db
+@_google_only()
+def test_using_a_link_ends_a_session_started_after_it_was_issued():
     user, _person, _household = make_member()
+    path, _token = _issue(user.username)
+    between = _signed_in_without_passkey(user)
 
-    with pytest.raises(CommandError, match="GOOGLE_ONLY_SIGN_IN"):
-        call_command("break_glass_sign_in", username=user.username, stdout=StringIO())
+    fresh = Client()
+    assert fresh.post(path).status_code == 302
 
-    assert not BreakGlassGrant.objects.exists()
+    assert between.get(reverse("home")).status_code == 302
+    assert "_auth_user_id" not in between.session
+    assert fresh.get(reverse("home")).status_code == 200
+
+
+@pytest.mark.django_db
+@_google_only()
+def test_a_refused_link_leaves_the_members_sessions_alone():
+    user, _person, _household = make_member()
+    _issue(user.username)
+    signed_in = _signed_in_without_passkey(user)
+
+    assert Client().post(reverse("break-glass", args=["A" * 43])).status_code == 404
+
+    assert signed_in.get(reverse("home")).status_code == 200
 
 
 @pytest.mark.django_db
