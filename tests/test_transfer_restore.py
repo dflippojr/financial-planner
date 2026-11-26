@@ -255,7 +255,8 @@ def test_recently_undone_never_shows_a_pair_with_a_leg_the_viewer_cannot_see():
     owner_page = _client(owner).get(reverse("transfer-review")).content.decode()
     assert (pair.pk, "restore") in _forms(owner_page[owner_page.index(UNDONE_START):])
     member_client = _client(member)
-    for url in (reverse("transfer-review"), f"{reverse('transfer-review')}?undone={pair.pk}"):
+    # since=0 widens the visit to the whole Recently undone window, which takes in this pair.
+    for url in (reverse("transfer-review"), f"{reverse('transfer-review')}?since=0"):
         page = member_client.get(url).content.decode()
         assert pair.pk not in {pk for pk, _action in _forms(page)}
         assert "SYN TRANSFER TO JOINT" not in page
@@ -372,15 +373,28 @@ def test_a_suggestion_restore_removed_comes_back_when_the_pair_is_undone_again()
     assert TransferPair.objects.get(leg_a=checking_leg, leg_b=second).status == TransferPair.Status.SUGGESTED
 
 
-def test_garbage_in_the_undone_parameter_is_ignored():
+@pytest.mark.parametrize("since", ["abc", "\u00b2", "-1", "1.5", "", "9" * 19])
+def test_garbage_in_the_since_parameter_is_ignored(since):
     owner, *_rest, pairs = _world()
     undo_transfer_pair(owner, pairs[0].pk)
-    query = f"abc,\u00b2,-1,99999999999999999999999,{pairs[0].pk},,"
-    response = _client(owner).get(reverse("transfer-review"), {"undone": query})
+    response = _client(owner).get(reverse("transfer-review"), {"since": since})
     assert response.status_code == 200
     excluded = _forms(_excluded_section(response.content.decode()))
-    assert (pairs[0].pk, "restore") in excluded
-    assert len(excluded) == 3
+    assert [action for _pk, action in excluded] == ["undo", "undo"]
+
+
+@pytest.mark.parametrize("since", ["0", "9" * 18])
+def test_a_since_outside_the_window_is_clamped_not_an_error(since):
+    owner, *_rest, pairs = _world()
+    undo_transfer_pair(owner, pairs[0].pk)
+    TransferPair.objects.filter(pk=pairs[0].pk).update(undone_at=timezone.now() - timedelta(seconds=10))
+    TransferPair.objects.filter(pk=pairs[1].pk).update(status=TransferPair.Status.UNDONE)
+    response = _client(owner).get(reverse("transfer-review"), {"since": since})
+    assert response.status_code == 200
+    excluded = _forms(_excluded_section(response.content.decode()))
+    # 0 reaches back to the start of the Recently undone window; a far future value means now.
+    expected = {(pairs[0].pk, "restore"), (pairs[2].pk, "undo")} if since == "0" else {(pairs[2].pk, "undo")}
+    assert set(excluded) == expected
 
 
 def test_ten_fast_clicks_stay_on_one_pair_when_undo_brings_a_competing_suggestion():
@@ -467,3 +481,52 @@ def test_the_audit_event_follows_leg_scopes_read_under_the_lock(action):
     # belongs on the card's now-private account, never on the shared one.
     assert event.account_id == card.pk
     assert event.household_id is None
+
+
+def test_every_pair_undone_in_one_visit_stays_in_place_past_fifty():
+    """No cap: the 51st Undo of a visit must not push the first undone row off the page (#820 review r2)."""
+    owner, *_rest, pairs = _world(pair_count=51)
+    _spread_timestamps(pairs)
+    client = _client(owner)
+    url = reverse("transfer-review")
+    page = client.get(url)
+    before = [pk for pk, _action in _forms(_excluded_section(page.content.decode()))]
+    assert len(before) == 51
+    for pair_id in before:
+        page = client.post(url, {"action": "undo", "pair_id": pair_id}, follow=True)
+        assert page.status_code == 200
+        url = page.redirect_chain[-1][0]
+
+    after = _forms(_excluded_section(page.content.decode()))
+    assert after == [(pk, "restore") for pk in before]
+
+
+def test_a_pair_another_household_undoes_during_the_visit_never_shows():
+    """Under the visit marker the Excluded list still shows only pairs the viewer can see (#635 decision)."""
+    owner, member, *_rest, pairs = _world(pair_count=2)
+    client = _client(member)
+    url = reverse("transfer-review")
+    page = client.post(url, {"action": "undo", "pair_id": pairs[0].pk}, follow=True)
+    visit = page.redirect_chain[-1][0]
+    assert "since=" in visit
+
+    stranger = make_person("stranger")
+    theirs = make_household(stranger, name="Synthetic Other Household")
+    checking = make_account(stranger, name="Synthetic Other Checking", scope=Account.Scope.HOUSEHOLD, household=theirs)
+    card = make_account(
+        stranger, name="Synthetic Other Card", account_type=Account.Type.CREDIT_CARD,
+        scope=Account.Scope.HOUSEHOLD, household=theirs,
+    )
+    make_transaction(stranger, checking, amount_minor=-31_400, transaction_date=date(2026, 3, 1), description="SYN OTHER CARD PAYMENT")
+    make_transaction(stranger, card, amount_minor=31_400, transaction_date=date(2026, 3, 1), description="SYN OTHER THANK YOU")
+    refresh_transfer_pairs(stranger)
+    other = TransferPair.objects.get(leg_a__account__household=theirs)
+    undo_transfer_pair(stranger, other.pk)
+
+    # The stranger, on the same visit marker, does see their own undone pair in place.
+    stranger_page = _client(stranger).get(visit).content.decode()
+    assert (other.pk, "restore") in _forms(_excluded_section(stranger_page))
+    member_page = client.get(visit).content.decode()
+    assert other.pk not in {pk for pk, _action in _forms(member_page)}
+    assert "SYN OTHER" not in member_page
+    assert (pairs[0].pk, "restore") in _forms(_excluded_section(member_page))

@@ -598,7 +598,13 @@ PROBE = {
     "suggestion_id": "suggestion",
     "transaction_id": "charges",
     "eligible_id": "charges",
-    "undone": "undone_pair",
+}
+
+# A query parameter that names no object, and the owner's value for it.
+PROBE_VALUES = {
+    # A visit marker a minute before the private side's undone pair was undone,
+    # so the page would list that pair if it ignored visibility (#635).
+    "since": lambda side: str(int(side.undone_pair.undone_at.timestamp()) - 60),
 }
 
 FILTERS = ("account", "tag", "scope")
@@ -722,8 +728,8 @@ PAGE_ROUTES = {
         owner_canary=True,
     ),
     "transfer-review": PageRoute(
-        # The page keeps undone pairs named here in place (#635).
-        query=("undone",),
+        # The page keeps pairs undone since this visit marker in place (#635).
+        query=("since",),
         actions={
             "confirm": _pair_action("confirm", "suggested_pair"),
             "dismiss": _pair_action("dismiss", "suggested_pair"),
@@ -1616,6 +1622,8 @@ def test_every_object_route_that_takes_a_post_says_what_its_body_names(world):
 
 
 def _probe_value(world, param):
+    if param in PROBE_VALUES:
+        return PROBE_VALUES[param](world.sides["private"])
     target = getattr(world.sides["private"], PROBE.get(param, "account"))
     return [str(item.pk) for item in target] if isinstance(target, list) else str(target.pk)
 

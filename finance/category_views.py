@@ -1,6 +1,7 @@
 """Tags, categories and the transfer review."""
 
 
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 from django.core.exceptions import ValidationError
@@ -8,6 +9,7 @@ from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
@@ -34,7 +36,6 @@ from .category_services import add_category, ensure_household_categories, rename
 from .households import current_household
 from .transfer_pairing import (
     RECENTLY_UNDONE_DAYS,
-    RECENTLY_UNDONE_LIMIT,
     confirm_transfer_pair,
     dismiss_transfer_pair,
     recently_undone_pairs,
@@ -225,41 +226,36 @@ _TRANSFER_ACTIONS = {
 }
 
 
-def _kept_undone_ids(request):
-    """Pair ids the page keeps in place as Undone, from `?undone=1,2` (#635).
+def _visit_since(request):
+    """When this visit to the Transfers page took its first action, from `?since=<epoch seconds>` (#635).
 
-    Only ids: the page shows a kept pair only if the viewer can see it and a
-    member undid it, so a forged id shows nothing. Garbage is ignored.
+    Every pair undone at or after it keeps its row, so nothing moves under the
+    cursor, however many pairs the member undoes. It only widens which of the
+    pairs the viewer can already see are listed, so a forged value shows nothing
+    new; garbage is ignored and the value is kept within the Recently undone window.
     """
-    kept = []
-    for part in request.GET.get("undone", "").split(",")[:RECENTLY_UNDONE_LIMIT * 2]:
-        part = part.strip()
-        # ASCII digits only ("²" is a digit to str.isdigit), within a bigint.
-        if part.isascii() and part.isdigit() and len(part) <= 18 and int(part) not in kept:
-            kept.append(int(part))
-    return kept[-RECENTLY_UNDONE_LIMIT:]
+    raw = request.GET.get("since", "")
+    # ASCII digits only ("\u00b2" is a digit to str.isdigit), and short enough to be a date.
+    if not (raw.isascii() and raw.isdigit() and len(raw) <= 18):
+        return None
+    now = timezone.now()
+    earliest = now - timedelta(days=RECENTLY_UNDONE_DAYS)
+    # Clamped as integers, so a huge value never reaches datetime and overflows.
+    seconds = min(max(int(raw), int(earliest.timestamp())), int(now.timestamp()))
+    return datetime.fromtimestamp(seconds, tz=UTC)
 
 
-def _transfer_review_url(kept):
-    url = reverse("transfer-review")
-    return f"{url}?{urlencode({'undone': ','.join(map(str, kept))})}" if kept else url
-
-
-def _kept_after(action, pair_id, kept):
-    # An undone pair stays where it was until the page is left; restoring it
-    # puts it back to an ordinary excluded row in the same place.
-    if action == "undo":
-        return [*kept, pair_id][-RECENTLY_UNDONE_LIMIT:]
-    if action == "restore":
-        return [item for item in kept if item != pair_id]
-    return kept
+def _transfer_review_url(since):
+    # Whole seconds, rounded down, so the first Undo of the visit is never later than the marker.
+    return f"{reverse('transfer-review')}?{urlencode({'since': int(since.timestamp())})}"
 
 
 @require_http_methods(["GET", "POST"])
 @never_cache
 def transfer_review(request):
-    kept = _kept_undone_ids(request)
+    since = _visit_since(request)
     if request.method == "POST":
+        since = since or timezone.now()
         try:
             pair_id = int(request.POST.get("pair_id", "0"))
         except (TypeError, ValueError) as exc:
@@ -272,17 +268,19 @@ def transfer_review(request):
         service_or_404(lambda: refresh_transfer_pairs(
             request.user, transaction_ids=[pair.leg_a_id, pair.leg_b_id]  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute, as in models.py
         ))
-        return redirect(_transfer_review_url(_kept_after(action, pair_id, kept)))
+        return redirect(_transfer_review_url(since))
     visible = visible_rows(TransferPair, request.user).select_related(
         "leg_a",
         "leg_b",
         "leg_a__account",
         "leg_b__account",
     )
-    marked = Q(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED))
-    kept_in_place = Q(pk__in=kept, status=TransferPair.Status.UNDONE, undone_at__isnull=False)
+    listed = Q(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED))
+    if since is not None:
+        # Undone during this visit: the row stays where it was, with Restore (#635).
+        listed |= Q(status=TransferPair.Status.UNDONE, undone_at__gte=since)
     # Ordered by a key no action changes, so a row never moves under the cursor (#635).
-    exclusions = list(visible.filter(marked | kept_in_place).order_by("-created_at", "-pk"))
+    exclusions = list(visible.filter(listed).order_by("-created_at", "-pk"))
     # A suggestion on a leg of a pair kept in place came from that Undo's refresh.
     # Listing it above would push the Restore button down under the cursor, and
     # Restore deletes it anyway, so it waits for the next visit to the page.
