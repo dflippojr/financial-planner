@@ -17,10 +17,9 @@ from finance.input_limits import MAX_DESCRIPTION_CHARS
 from finance.csv_import.fingerprint import file_import_fingerprint_description, transaction_fingerprint
 from finance.csv_import.parser import Preview, preview_csv
 from finance.csv_import.profiles import CSV_FILE_SOURCES, OFX_MAPPING
+from finance.access import DENIED, require_person
 from finance.lifecycle_services import (
-    _DENIED,
     _lock_visible_account_with_pair_and_refund_counterparts,
-    _person_for,
     _visible_account_for_update,
     lock_actor_household,
     lock_ledger_writer,
@@ -54,7 +53,7 @@ def _active_account(principal, account_id):
     # balances, so an import pays no query to learn it.
     account = _visible_account_for_update(principal, account_id, _has_calculated=has_calculated_expression())
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return account
 
 
@@ -210,7 +209,7 @@ def _locked_saved_mapping(person, saved_csv_mapping, mapping, document):
         .first()
     )
     if locked is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if mapping_from_saved(locked) != mapping or not headers_match(locked, document.headers):
         raise ValidationError(MAPPING_CHANGED)
     return locked
@@ -235,7 +234,7 @@ def commit_csv_import(
     date_range_end,
     saved_csv_mapping=None,
 ):
-    person = _person_for(principal)
+    person = require_person(principal)
     own_membership, _memberships = lock_ledger_writer(person)
     account = _active_account(person, account_id)
     if saved_csv_mapping is not None:
@@ -324,7 +323,7 @@ def categorize_imported_batch(principal, batch):
 
     if batch is None:
         return []
-    person = _person_for(principal)
+    person = require_person(principal)
     created = list(Transaction.objects.filter(import_batch=batch, status=Transaction.Status.ACTIVE))
     if not created:
         return []
@@ -536,10 +535,10 @@ def _coverage_holes(batch, others, removed_ids):
 @transaction.atomic
 def archive_batch(principal, account_id, batch_id, *, manual) -> ImportUndoResult:
     """Archive one active batch of the given kind (manual entry or import)."""
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     # A manual entry's batch holds its one row for good, so its rows can seed
     # the ordered counterpart locks. An import's cannot: until the account lock
     # is held, a concurrent undo may re-home a row into the batch (#796), and a
@@ -552,7 +551,7 @@ def archive_batch(principal, account_id, batch_id, *, manual) -> ImportUndoResul
         )
     account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=manual_leg_ids)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     batch = (
         ImportBatch.objects.select_for_update()
         .filter(
@@ -564,7 +563,7 @@ def archive_batch(principal, account_id, batch_id, *, manual) -> ImportUndoResul
         .first()
     )
     if batch is None or (batch.source == ImportBatch.Source.MANUAL) != manual:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     from finance.receipt_services import delete_receipts_for_transactions
 
     now = timezone.now()

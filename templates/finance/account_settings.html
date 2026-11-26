@@ -8,11 +8,13 @@
 <p class="mb-4">Password: {% if has_password %}<span class="badge badge-success">set</span>{% else %}<span class="badge">not set</span>{% endif %}</p>
 {% if google_signin_enabled %}
 {% if has_google %}
+{% if can_disconnect_google %}
 <form method="post" class="mb-4">
   {% csrf_token %}
   <input type="hidden" name="action" value="disconnect-google">
   <button type="submit" class="btn">Disconnect Google</button>
 </form>
+{% endif %}
 {% else %}
 <form method="post" class="mb-4">
   {% csrf_token %}
@@ -27,7 +29,7 @@
   <input type="hidden" name="action" value="remove-password">
   <button type="submit" class="btn btn-outline">Remove password</button>
 </form>
-{% else %}
+{% elif password_signin_enabled %}
 <form method="post" class="max-w-lg">
   {% csrf_token %}
   <input type="hidden" name="action" value="add-password">

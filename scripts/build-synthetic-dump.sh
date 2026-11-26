@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a synthetic pg_dump for ops/deploy-rehearsal.ps1 -DumpPath (#538).
+# Build a synthetic pg_dump for ops/deploy_rehearsal.py --dump-path (#538, #789).
 #
 # Starts a throwaway PostgreSQL 18 container, seeds it with the #532 fixture
 # builder (tests/migration_fixtures/seed.py) with finance stopped at

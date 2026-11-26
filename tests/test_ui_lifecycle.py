@@ -91,6 +91,68 @@ ui_instance.main()
             child.communicate(timeout=10)
 
 
+def test_serve_imports_urlconf_and_chat_runner_before_starting_threads(tmp_path):
+    # #818: the chat worker thread imported finance.chat_runner (which imports
+    # finance.forms.planning submodule-first) while the first request thread
+    # loaded the URLconf (finance.forms package-first). On Python 3.14, which
+    # locks a submodule before its parent, that opposite order deadlocked.
+    # The launcher must finish both imports on the main thread before any of
+    # its threads start, whatever the interpreter's import locking.
+    report = tmp_path / "imports.json"
+    directory = tmp_path / (ui_instance.PREFIX + "imports")
+    directory.mkdir()
+    code = """
+import json, sys, threading
+from scripts import ui_instance
+
+report, directory = sys.argv[1], sys.argv[2]
+seen = []
+original_start = threading.Thread.start
+
+class Stop(Exception):
+    pass
+
+def loaded(name):
+    module = sys.modules.get(name)
+    return module is not None and not getattr(module.__spec__, "_initializing", False)
+
+def observed_start(thread):
+    from django.conf import settings
+    seen.append({"thread": thread.name, "urlconf": loaded(settings.ROOT_URLCONF),
+                 "chat_runner": loaded("finance.chat_runner")})
+    raise Stop()
+
+threading.Thread.start = observed_start
+try:
+    ui_instance.serve(__import__("pathlib").Path(directory))
+except Stop:
+    pass
+finally:
+    threading.Thread.start = original_start
+    with open(report, "w") as handle:
+        json.dump(seen, handle)
+"""
+    child = subprocess.run([sys.executable, "-c", code, str(report), str(directory)],
+                           cwd=ui_instance.ROOT, env=ui_instance.isolated_environment(directory),
+                           capture_output=True, text=True, timeout=120)
+    assert child.returncode == 0, child.stderr[-2000:]
+    seen = json.loads(report.read_text())
+    assert seen, "serve() started no thread"
+    assert seen[0]["urlconf"] and seen[0]["chat_runner"], seen[0]
+
+
+def test_preload_thread_imports_loads_the_sign_in_route_and_chat_runner():
+    from django.urls import Resolver404, resolve
+
+    patterns = ui_instance.preload_thread_imports()
+    assert patterns
+    assert "finance.chat_runner" in sys.modules
+    try:
+        resolve("/sign-in/")
+    except Resolver404:
+        pytest.fail("The preloaded URLconf does not route /sign-in/")
+
+
 def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatch, tmp_path):
     # Run the real launcher in a separate interpreter: pytest's initialized
     # Django settings must never replace its fresh file-backed SQLite database.

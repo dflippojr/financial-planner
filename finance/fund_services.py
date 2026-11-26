@@ -19,7 +19,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from .access import visible_rows
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .access import require_person as _person
 from .audit_services import owned_audience, record
 from .cash_flow import format_minor
@@ -123,7 +123,7 @@ def visible_fund_accounts(principal, *, today):
 def account_fund_summary(principal, account, *, today):
     """The account page's fund panel, or None when the account holds no fund the viewer may see."""
     if not visible_rows(Account, principal).filter(pk=account.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     position = account_position(account, today=today)
     if not position.funds:
         return None
@@ -142,7 +142,7 @@ def _lock_account(person, goal):
         raise ValidationError(FUND_ACCOUNT_ERROR)
     account = lock_account(goal.linked_account_id, queryset=visible_rows(Account, person))
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if not fund_matches_account(goal, account):
         raise ValidationError(FUND_ACCOUNT_ERROR)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
@@ -164,7 +164,7 @@ def _lock_goals(person, goals):
         for goal in visible_rows(SavingsGoal, person).select_for_update(of=("self",)).filter(pk__in=ids).order_by("pk")
     }
     if len(locked) != len(ids):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     for goal in locked.values():
         _check_fund(person, goal)
     return locked
@@ -235,7 +235,7 @@ def resolve_shortfall(principal, account, reductions, *, today=None):
     person = _person(principal, check_authenticated=False)
     today = today or timezone.localdate()
     if not visible_rows(Account, person).filter(pk=account.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     chosen = [(goal, amount) for goal, amount in reductions if amount]
     if not chosen:
         raise ValidationError("Enter an amount to take out of at least one fund.")
@@ -382,7 +382,7 @@ def undo_draw_down(principal, entry):
         goal = _lock_goals(person, [entry.goal])[entry.goal_id]
         current = FundEntry.objects.select_for_update().filter(pk=entry.pk, goal=goal).first()
         if current is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         if current.kind != FundEntry.Kind.DRAW_DOWN:
             raise ValidationError(NOT_DRAW_DOWN_ERROR)
         if current.undone_at is not None:
@@ -416,7 +416,7 @@ def fund_history(principal, goal):
     from .models import Transaction
 
     if not visible_rows(SavingsGoal, principal).filter(pk=goal.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     entries = list(
         FundEntry.objects.filter(goal=goal)
         .select_related("actor", "undone_by", "transaction")

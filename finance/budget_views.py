@@ -10,7 +10,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
-from .access import service_or_404 as _service_or_404
+from .access import service_or_404
 from .budget_services import (
     NEAR_LIMIT_PERCENT,
     amount_for,
@@ -151,7 +151,7 @@ def budget_edit(request, budget_id):
 def budget_archive(request, budget_id):
     budget = _visible_budget(request.user, budget_id)
     month = parse_month(request.POST.get("month"))
-    _service_or_404(lambda: set_budget_archived(request.user, budget, True), also=(ValidationError,))
+    service_or_404(lambda: set_budget_archived(request.user, budget, True), also=(ValidationError,))
     return redirect(_list_url(month))
 
 
@@ -161,7 +161,7 @@ def budget_rollover_toggle(request, budget_id):
     budget = _visible_budget(request.user, budget_id)
     month = parse_month(request.POST.get("month"))
     enabled = request.POST.get("enabled") == "1"
-    _service_or_404(lambda: set_budget_rollover(request.user, budget, enabled, month=month), also=(ValidationError,))
+    service_or_404(lambda: set_budget_rollover(request.user, budget, enabled, month=month), also=(ValidationError,))
     return redirect(_list_url(month))
 
 
@@ -171,7 +171,7 @@ def budget_rollover_reset(request, budget_id):
     budget = _visible_budget(request.user, budget_id)
     month = parse_month(request.GET.get("month") or request.POST.get("month"))
     if request.method == "POST":
-        _service_or_404(lambda: reset_budget_rollover(request.user, budget, month=month), also=(ValidationError,))
+        service_or_404(lambda: reset_budget_rollover(request.user, budget, month=month), also=(ValidationError,))
         return redirect(_list_url(month))
     return render(
         request,

@@ -8,7 +8,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
 from finance.cash_flow import GROUPING_MONTH, cash_flow_report, iter_period_windows
-from finance.access import require_person as _person_for
+from finance.access import require_person
 from finance.category_services import assign_category
 from finance.ledger_counting import (
     income_and_spending_by_account,
@@ -35,7 +35,7 @@ from tests.test_cash_flow import make_account, make_household, make_person, make
 
 def reference_totals(principal, *, date_from=None, date_to=None, accounts=None, tag=None):
     """The pre-SQL implementation, kept as the oracle."""
-    person = _person_for(principal)
+    person = require_person(principal)
     visible_accounts = Account.objects.visible_to(person)
     if accounts is not None:
         visible_accounts = visible_accounts.filter(pk__in=[getattr(item, "pk", item) for item in accounts])

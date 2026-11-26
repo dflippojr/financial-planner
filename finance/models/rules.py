@@ -5,7 +5,7 @@ from django.db.models import F, Q
 from django.utils import timezone
 
 from .base import actor_display_name
-from .people import Household, Membership, Person, person_for as _person_for
+from .people import Household, Membership, Person, person_for
 from .categories import Category
 from .accounts import Account
 from .ledger import Transaction
@@ -64,7 +64,7 @@ class CategoryRule(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             current_households = Membership.objects.filter(

@@ -182,6 +182,7 @@ urlpatterns = [
     path("household/leave/", RedirectView.as_view(pattern_name="leave-household", permanent=True, query_string=True)),
     path("join/", auth_views.join, name="join"),
     path("recover/", auth_views.recover, name="recover"),
+    path("break-glass/<str:token>/", auth_views.break_glass, name="break-glass"),
     path("accounts/", account_views.account_list, name="account-list"),
     path("accounts/sort/", account_views.account_sort_save, name="account-sort"),
     path(

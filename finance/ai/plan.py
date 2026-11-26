@@ -24,7 +24,7 @@ from .http import HarnessHttpError
 from .types import AUTHORIZATION_REQUIRED, PLAN_BACKENDS, PLAN_REPLACES_API, UNAVAILABLE
 from ..households import current_household
 from ..encryption import decrypt_secret
-from ..lifecycle_services import _DENIED, _person_for
+from ..access import DENIED, require_person
 from ..models import AiPlanLink, AiProviderConnection, AuditEvent, Membership, Person
 from ..policy_services import may_use_ai
 from ..security_services import EVENT_TYPES, record_security_event
@@ -112,10 +112,10 @@ def host_connection(person):
 def set_offer_plan_links(principal, offered):
     from .services import audit_offer_change
 
-    person = _person_for(principal)
+    person = require_person(principal)
     connection = _own_harness(person)
     if connection is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     was = connection.offer_plan_links
     connection.offer_plan_links = bool(offered)
     connection.save(update_fields=("offer_plan_links",))
@@ -131,7 +131,7 @@ def mark_login_required(person, backend):
 
 
 def _context(principal, backend):
-    person = _person_for(principal)
+    person = require_person(principal)
     if backend not in PLAN_BACKENDS:
         raise PlanLinkError("Choose Claude or Codex.")
     if not may_use_ai(person):
@@ -219,7 +219,7 @@ def poll_login(principal, backend, *, request=None):
 
 
 def unlink(principal, backend):
-    person = _person_for(principal)
+    person = require_person(principal)
     link = plan_link(person, backend)
     if link is None:
         return

@@ -20,7 +20,6 @@ from .auth_services import (
 )
 from .policy_services import current_policy, record_onboarding_acceptance
 from .google_auth import (
-    GOOGLE_FAILED,
     GOOGLE_FLOW_NONCE_STATE_KEY,
     GoogleOnboardingConflict,
     bind_google_flow_nonce,
@@ -28,12 +27,14 @@ from .google_auth import (
     consume_google_pending,
     consume_google_pending_for_state,
     google_email_is_verified,
+    google_failed_message,
     google_reauth_identity_matches,
     google_reauth_is_recent,
     google_signin_enabled,
     google_throttle_key,
     google_uid,
     has_usable_google_sign_in,
+    has_usable_password_sign_in,
     peek_google_pending,
 )
 from .security_services import client_ip
@@ -156,7 +157,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
         raise ImmediateHttpResponse(self._failed_response(request, "login"))
 
     def validate_disconnect(self, account, accounts):
-        if has_usable_google_sign_in(account.user) and not account.user.has_usable_password():
+        if has_usable_google_sign_in(account.user) and not has_usable_password_sign_in(account.user):
             raise self.validation_error("disconnect_last")
 
     def _complete_join(self, request, sociallogin, pending, key):
@@ -254,7 +255,7 @@ class MemberSocialAccountAdapter(DefaultSocialAccountAdapter):
     def _failed_response(self, request, page="login"):
         from django.contrib import messages
 
-        messages.error(request, GOOGLE_FAILED)
+        messages.error(request, google_failed_message())
         if page == "join":
             return HttpResponseRedirect(reverse("join"))
         if page == "setup":

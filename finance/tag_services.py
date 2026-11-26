@@ -2,11 +2,11 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models.functions import Lower
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .audit_services import record
 from .households import current_household
 from .lifecycle_services import lock_actor_household
-from .models import Account, AuditEvent, Tag, Transaction, _person_for
+from .models import Account, AuditEvent, Tag, Transaction, person_for
 from .account_locks import lock_account
 
 TAG_NAME_ERROR = "Enter a tag name."
@@ -44,10 +44,10 @@ def _name_taken(household, name, *, exclude_pk=None):
 
 @transaction.atomic
 def add_tag(principal, name):
-    person = _person_for(principal)
+    person = person_for(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     cleaned = _cleaned_tag_name(name)
     if _name_taken(household, cleaned):
@@ -63,14 +63,14 @@ def add_tag(principal, name):
 
 @transaction.atomic
 def rename_tag(principal, tag_id, name):
-    person = _person_for(principal)
+    person = person_for(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     tag = Tag.objects.visible_to(person).select_for_update().filter(pk=tag_id).first()
     if tag is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     cleaned = _cleaned_tag_name(name)
     if _name_taken(household, cleaned, exclude_pk=tag.pk):
         raise ValidationError(TAG_EXISTS)
@@ -88,14 +88,14 @@ def rename_tag(principal, tag_id, name):
 
 @transaction.atomic
 def archive_tag(principal, tag_id):
-    person = _person_for(principal)
+    person = person_for(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     tag = Tag.objects.visible_to(person).select_for_update().filter(pk=tag_id).first()
     if tag is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if not tag.is_archived:
         tag.is_archived = True
         tag.save(update_fields=("is_archived", "updated_at"))
@@ -106,25 +106,25 @@ def archive_tag(principal, tag_id):
 
 @transaction.atomic
 def set_transaction_note_and_tags(principal, transaction_id, *, note, tag_ids, new_tag_name=""):
-    person = _person_for(principal)
+    person = person_for(principal)
     visible = (
         Transaction.objects.visible_to(person)
         .filter(pk=transaction_id, status=Transaction.Status.ACTIVE)
         .first()
     )
     if visible is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     account = lock_account(visible.account_id, queryset=Account.objects.visible_to(person))
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     txn = (
         Transaction.objects.select_for_update()
         .filter(pk=visible.pk, account=account, status=Transaction.Status.ACTIVE)
         .first()
     )
     if txn is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     cleaned_note = note or ""
     if len(cleaned_note) > 2000:
         raise ValidationError(NOTE_TOO_LONG)
@@ -135,16 +135,16 @@ def set_transaction_note_and_tags(principal, transaction_id, *, note, tag_ids, n
     selected = []
     if new_tag_name and str(new_tag_name).strip():
         if household is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         selected.append(add_tag(person, new_tag_name))
     if requested:
         if household is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         active = list(
             Tag.objects.visible_to(person).active().filter(pk__in=requested)
         )
         if {tag.pk for tag in active} != set(requested):
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         selected.extend(active)
     kept_archived = list(txn.tags.filter(is_archived=True))
     previous_tag_ids = set(txn.tags.values_list("pk", flat=True))

@@ -89,9 +89,9 @@ def validate_changed_fields(value):
 
 class AuditQuerySet(models.QuerySet):
     def visible_to(self, principal):
-        from .models import Account, Membership, _person_for
+        from .models import Account, Membership, person_for
 
-        person = _person_for(principal)
+        person = person_for(principal)
         if person is None:
             return self.none()
         households = Membership.objects.filter(person=person, ended_at__isnull=True).values("household_id")

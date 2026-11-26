@@ -2,7 +2,8 @@ from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 
 from .audit_services import changed_names, record, snapshot as audit_snapshot
-from .lifecycle_services import _DENIED, _person_for, lock_actor_household
+from .lifecycle_services import lock_actor_household
+from .access import DENIED, require_person
 from .models import Account, AuditEvent, BalanceSnapshot
 from .account_locks import lock_account
 
@@ -14,8 +15,8 @@ class SnapshotError(Exception):
 DUPLICATE_MANUAL = "A manual balance already exists for this date."
 
 
-def _lock_editable_account(principal, account_id):
-    person = _person_for(principal)
+def lock_editable_account(principal, account_id):
+    person = require_person(principal)
     lock_actor_household(person)
     account = lock_account(
         account_id,
@@ -23,7 +24,7 @@ def _lock_editable_account(principal, account_id):
         of_self=True,
     )
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return account
 
 
@@ -34,7 +35,7 @@ def _lock_manual_snapshot(account, snapshot_id):
         .first()
     )
     if snapshot is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return snapshot
 
 
@@ -73,8 +74,8 @@ def _apply_manual_fields(person, account, snapshot, *, snapshot_date, amount_min
 
 @transaction.atomic
 def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor, note="", net_contribution_minor=None):
-    account = _lock_editable_account(principal, account_id)
-    person = _person_for(principal)
+    account = lock_editable_account(principal, account_id)
+    person = require_person(principal)
     existing = (
         BalanceSnapshot.objects.select_for_update(of=("self",))
         .filter(account=account, snapshot_date=snapshot_date, source=BalanceSnapshot.Source.MANUAL)
@@ -111,9 +112,9 @@ def record_manual_snapshot(principal, account_id, *, snapshot_date, amount_minor
 
 @transaction.atomic
 def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date, amount_minor, note="", net_contribution_minor=None):
-    account = _lock_editable_account(principal, account_id)
+    account = lock_editable_account(principal, account_id)
     snapshot = _lock_manual_snapshot(account, snapshot_id)
-    person = _person_for(principal)
+    person = require_person(principal)
     updated = _apply_manual_fields(
         person,
         account,
@@ -129,11 +130,11 @@ def update_manual_snapshot(principal, account_id, snapshot_id, *, snapshot_date,
 
 @transaction.atomic
 def delete_manual_snapshot(principal, account_id, snapshot_id):
-    account = _lock_editable_account(principal, account_id)
+    account = lock_editable_account(principal, account_id)
     snapshot = _lock_manual_snapshot(account, snapshot_id)
     target_id = snapshot.pk
     snapshot.delete()
-    person = _person_for(principal)
+    person = require_person(principal)
     record(person, AuditEvent.Action.RECORD_DELETED, AuditEvent.TargetType.BALANCE, target_id,
            audience={"account": account})
     _refresh_calculated(person, account)

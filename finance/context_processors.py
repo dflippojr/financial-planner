@@ -3,11 +3,11 @@ from urllib.parse import urlsplit
 from django.http import QueryDict
 from django.urls import reverse
 
-from .google_auth import google_signin_enabled
+from .google_auth import google_signin_enabled, password_sign_in_enabled
 
 
 def google_signin(_request):
-    return {"google_signin_enabled": google_signin_enabled()}
+    return {"google_signin_enabled": google_signin_enabled(), "password_signin_enabled": password_sign_in_enabled()}
 
 
 def ai_features(request):

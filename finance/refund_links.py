@@ -10,8 +10,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Exists, F, OuterRef, Q
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .access import visible_rows
 from .ledger_counting import exclusion_exists_for
 from .ledger_edits import (
@@ -470,9 +470,9 @@ def account_ids_in_refunds_touching_transactions(transaction_ids):
 
 @transaction.atomic
 def link_refund(principal, refund_id, original_id, original_part_id=None):
-    person = _person_for(principal)
+    person = require_person(principal)
     if refund_id == original_id:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     refund = (
         visible_rows(Transaction, person)
         .filter(pk=refund_id, status=Transaction.Status.ACTIVE)
@@ -486,7 +486,7 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
         .first()
     )
     if refund is None or original is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     locked = lock_accounts_and_transactions(person, [refund, original])
     by_id = {item.pk: item for item in locked}
     refund = by_id[refund_id]
@@ -497,7 +497,7 @@ def link_refund(principal, refund_id, original_id, original_part_id=None):
         # alone still stands for another, so they cannot relink beside it.
         if RefundLinkDrop.objects.filter(link=existing, person=person).exists():
             raise ValidationError(REFUND_LINK_STANDS)
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if (
         refund.amount_minor <= 0
         or original.amount_minor >= 0

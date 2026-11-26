@@ -8,7 +8,7 @@ Build a private, self hosted personal finance app that can eventually replace Ro
 
 ## Confirmed decisions
 
-- Linux host (#613, owner decision 2026-11-24): production deployment and the self-hosted review runner support Linux only. Port the post-deploy check to stdlib Python here; keep all existing `.ps1` scripts and their tests until an owner-confirmed real deploy. The owner runs the port against production first. The deploy-rehearsal port is #789; runner-script removal after that deploy is #790.
+- Linux host (#613, owner decision 2026-11-24): production deployment and the self-hosted review runner support Linux only. Port the post-deploy check to stdlib Python here; keep all existing `.ps1` scripts and their tests until an owner-confirmed real deploy. The owner runs the port against production first. The deploy-rehearsal port is `ops/deploy_rehearsal.py` (#789), which calls the Python post-deploy check; the owner runs its first real rehearsal, and `ops/deploy-rehearsal.ps1` stays until that deploy too. Runner-script removal after that deploy is #790.
 
 - Undo keeps rows another import also holds (#796, owner decision 2026-11-24 on #679; liaison decision 2026-11-24 on #796, close the class): no undo may leave a silent gap. Each file import records the fingerprints of the rows it skipped as duplicates. After any undo, every remaining active file batch on the account is checked, earlier or later, not only the batches after the undone one. A row that a batch of the same source still covers is re-homed to it instead of archived. For any other batch left with a hole (another source, whose stored original fields would be misread, or a batch imported before migration 0093, which recorded nothing), the rows are archived and the undo page shows a warning naming that batch and the days, and says to import that file again. A row is matched to a batch by the date it was imported with, from its correction history, not its current date (owner design card 2026-11-25). Batches imported before migration 0093 are best effort: they are matched by their confirmed date range only, so a row such a file held outside that range is not detected. Every such active batch whose range contains a removed row's import-time day is named in the warning, earlier or later than the undone batch, even though this warns more often than needed (owner decision 2026-11-25). Rows no batch covers are archived as before. The undo message also says how many rows stayed, the `import_undone` audit event carries `rehomed_count`, and each moved row gets a history entry. Details in data-model.md.
 - File-owned days after a SimpleFIN cut-over (#743, owner decision 2026-11-13, option A, superseding the same day's ledger-derived rule): once a file import fills the gap while a transactions-mode link is failing (#735), those days belong to the file. `commit_csv_import` stores the boundary on the batch as the nullable `ImportBatch.owns_simplefin_through`, set only while the account's link is failing: the later of the confirmed `date_range_end` and the latest cut-over date the import compared among the rows it accepted (new or duplicate), so a duplicates-only file still owns its confirmed range. A file whose value would fall before the first day the failing link accepts owns nothing, since those days are SimpleFIN's. The sync skips SimpleFIN rows posted on or before the latest value among active batches, the cut-over check treats the gap as owned, and undoing the batch clears the value. A file imported while the link was healthy stores null and owns no days. Existing batches stay null (migration 0092 is additive only). The import preview and Connections say which days the file owns. Dates only, never amounts (#671, #732 stand). Details in data-model.md, Cut-over.
@@ -267,6 +267,24 @@ Defaults recorded with the decisions (owner may change):
 - First-run setup requires a one-time setup code from `production.env` (`SETUP_CODE`). This stops anyone else who can reach the URL first from claiming ownership. The code stops working once the first member exists, and a database lock prevents two concurrent setups.
 - Google sign-in is off unless `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured. With it off, the app behaves as it does today.
 - Only the `openid email profile` scopes are requested. The app stores the Google subject id and email for display, never tokens.
+
+## Production mode: Google-only sign-in (2026-11-24, #750 stage 1, #792)
+
+Owner decisions (owner card 2026-11-24 on #750):
+- **Google is the only sign-in in production.** With production mode on, username and password login is refused everywhere, from the tailnet and loopback too. There is no Cloudflare Access in front of the app.
+- **Break-glass is a management command only.** An admin who cannot sign in with Google regains access through a documented command run on the host, never through a password form.
+- **One trust mechanism for proxies.** `client_ip` takes the visitor's address from `CF-Connecting-IP`, falling back to the right-most `X-Forwarded-For` hop, only when the connection comes from an address in `TRUSTED_PROXY_IPS`; from anywhere else it uses the socket peer and ignores both headers.
+
+Defaults recorded with the decisions (owner may change):
+- Production mode is the `GOOGLE_ONLY_SIGN_IN` setting, off by default. It supersedes "Google and passwords both stay" above only while it is on.
+- "No password login" covers every place a password is accepted: sign-in, confirmation of a sensitive action, join, first-run setup, account recovery (which only sets a password) and the passkey step after a password. Members cannot add a password or disconnect Google while it is on.
+- The break-glass command prints a one-time link (15 minutes, single use, digest only at rest) that signs one member in. It is refused for requests that came through Cloudflare, so it works on the tailnet only. `--unlink-google` also removes the member's Google link so they can connect another account. This replaces "There is no admin/CLI reset path".
+- The app refuses to start in production mode without Google credentials, and with a `GOOGLE_ONLY_SIGN_IN` value other than `true`, `false` or empty.
+
+Owner decisions on the defaults above (2026-11-25 on #792, relayed by the liaison):
+- Approved: the one-time sign-in link; no passwords anywhere in Google-only mode (recovery off, no adding a password, Google cannot be disconnected); the link is refused through the tunnel (`CF-Connecting-IP`).
+- Changed: the break-glass command works in both modes, not only in Google-only mode.
+- Issuing a break-glass link, and using it, each sign the member out everywhere and drop their unfinished sign-ins.
 
 ## Interface styling decisions (2026-10-01)
 

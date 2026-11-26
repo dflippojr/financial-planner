@@ -22,7 +22,8 @@ from finance.date_bounds import activity_date_error
 from finance.encryption import check_encryption_key, decrypt_access_url, encrypt_access_url
 from finance.audit_services import append_event
 from finance.audit_operations import execution, operation, outcome, member_operation
-from finance.lifecycle_services import _DENIED, _person_for, create_account, lock_actor_household
+from finance.lifecycle_services import create_account, lock_actor_household
+from finance.access import DENIED, require_person
 from finance.models import (
     Account,
     AuditEvent,
@@ -246,7 +247,7 @@ def claim_connection(principal, setup_token: str) -> SimpleFinConnection:
     the Access URL when the token is claimed, so one the app cannot store
     would be lost and the token spent.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     if SimpleFinConnection.objects.filter(owner=person).exists():
         raise SimpleFinAlreadyClaimed(ALREADY_CONNECTED)
     claim_url = decode_setup_token(setup_token)
@@ -326,7 +327,7 @@ def _visible_linkable_account(person, account_id):
         .first()
     )
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return account
 
 
@@ -334,7 +335,7 @@ def _create_linked_account(person, *, name, account_type, sharing):
     membership = Membership.objects.filter(person=person, ended_at__isnull=True).first()
     if sharing == Account.Scope.HOUSEHOLD:
         if membership is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         # Shared accounts need a mode (#30); co-owned matches how sharing
         # behaved before modes existed.
         return create_account(person, name=name, account_type=account_type,
@@ -447,13 +448,13 @@ def _create_and_link(person, connection, choice, simplefin_account_id):
 
 @transaction.atomic
 def save_account_links(principal, connection_id, choices: list[dict]) -> list[AccountLink]:
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     connection = (
         SimpleFinConnection.objects.select_for_update().filter(pk=connection_id, owner=person).first()
     )
     if connection is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     created = []
     link_state = _link_state(connection)
     for choice in choices:
@@ -930,7 +931,7 @@ def sync_connection(principal, connection_id, *, ignore_rate_limit=False, schedu
     applied under the lock after re-checking the connection and its links.
     A failure record commits on its own, and the error is raised after it.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     try:
         plan = _plan_sync(person, connection_id, ignore_rate_limit=ignore_rate_limit)
     except SimpleFinRateLimited:
@@ -973,7 +974,7 @@ def _plan_sync(person, connection_id, *, ignore_rate_limit):
     """Everything the outbound fetch needs, read without taking locks."""
     connection = SimpleFinConnection.objects.filter(pk=connection_id, owner=person).first()
     if connection is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
         raise SimpleFinRateLimited(RATE_LIMITED)
     links = list(AccountLink.objects.filter(connection=connection))
@@ -1045,7 +1046,7 @@ def _locked_connection(person, connection_id, plan, *, ignore_rate_limit):
         SimpleFinConnection.objects.select_for_update().filter(pk=connection_id, owner=person).first()
     )
     if connection is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if _rate_limited(connection, ignore_rate_limit=ignore_rate_limit):
         # Another sync finished while this one was fetching.
         raise SimpleFinRateLimited(RATE_LIMITED)
@@ -1194,13 +1195,13 @@ def _refresh_after_sync(person, syncable_ids, now):
 
 @transaction.atomic
 def disconnect_connection(principal, connection_id) -> None:
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     connection = (
         SimpleFinConnection.objects.select_for_update().filter(pk=connection_id, owner=person).first()
     )
     if connection is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     connection_id = connection.pk
     connection.delete()
     append_event(action=AuditEvent.Action.SIMPLEFIN_DISCONNECTED, actor=person, target_id=connection_id)

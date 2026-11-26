@@ -6,7 +6,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
-from .access import service_or_404 as _service_or_404
+from .access import service_or_404
 from .csv_import.parser import CsvInputError
 from .csv_import.staging import KIND_GOAL_IMPORT, StageUnavailable, create_stage, delete_stage, load_stage
 from .forms import GoalImportForm, SavingsBufferForm
@@ -61,7 +61,7 @@ def savings_goal_buffer(request):
     _person(request)
     form = SavingsBufferForm(request.POST)
     if form.is_valid():
-        _service_or_404(lambda: set_savings_buffer(request.user, form.buffer_minor()), also=(ValidationError,))
+        service_or_404(lambda: set_savings_buffer(request.user, form.buffer_minor()), also=(ValidationError,))
         messages.success(request, "Safety buffer saved.")
     else:
         messages.error(request, "Enter a buffer of zero or more, or leave it blank.")
@@ -122,7 +122,7 @@ def savings_goal_import(request):
     if request.method == "GET":
         return _render_import(request)
     if request.POST.get("action") == "commit":
-        return _service_or_404(lambda: _commit_import(request))
+        return service_or_404(lambda: _commit_import(request))
     if request.POST.get("action") == "cancel":
         delete_stage(request, request.POST.get("token", ""))
         return redirect("savings-goals")

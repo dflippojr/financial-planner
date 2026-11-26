@@ -8,7 +8,7 @@ from django.db.models.functions import Coalesce
 from django.urls import reverse
 from django.utils import timezone
 
-from .access import DENIED as _DENIED, require_person as _person_for
+from .access import DENIED, require_person
 from .alert_services import schedule_after_category_change
 from .category_services import assignable_categories, ensure_household_categories
 from .households import current_household
@@ -46,7 +46,7 @@ from .account_locks import lock_accounts
 
 
 def _rule_or_404(principal, rule_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     rule = (
         CategoryRule.objects.visible_to(person)
         .select_related("category", "account", "owner_person", "owner_household")
@@ -54,7 +54,7 @@ def _rule_or_404(principal, rule_id):
         .first()
     )
     if rule is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return person, rule
 
 
@@ -91,7 +91,7 @@ def _rule_category(person, action, category_id):
         raise ValidationError("Choose what the rule does.")
     category = assignable_categories(person).filter(pk=category_id).first()
     if category is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return category
 
 
@@ -106,7 +106,7 @@ def _visible_rule_account(person, account_id):
         return None
     account = Account.objects.visible_to(person).filter(pk=account_id).first()
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return account
 
 
@@ -115,9 +115,9 @@ def _rule_for_save(person, household, rule_id, owner_kind, enabled):
         return CategoryRule(enabled=enabled)
     _, rule = _rule_or_404(person, rule_id)
     if owner_kind == "personal" and rule.owner_person_id != person.pk:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if owner_kind == "household" and rule.owner_household_id != household.pk:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return rule
 
 
@@ -178,10 +178,10 @@ def save_category_rule(
     note=None,
 ):
     """Create or edit a rule. `note` None keeps the stored note (blank for a new rule)."""
-    person = _person_for(principal)
+    person = require_person(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     note_line = None if note is None else validate_note_line(note)
     lock_actor_household(person)
     ensure_household_categories(household)
@@ -387,7 +387,7 @@ def manual_rule_offer(principal, txn):
     contains = _offer_text(txn)
     if contains is None:
         return None
-    person = _person_for(principal)
+    person = require_person(principal)
     rows = _offer_rows(person, txn, contains)
     if len(rows) < MIN_OFFER_OTHERS:
         return None
@@ -580,10 +580,10 @@ def unsaved_rule(
     priority=0,
 ):
     """A rule as save_category_rule would build it, checked the same way but never saved."""
-    person = _person_for(principal)
+    person = require_person(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     ensure_household_categories(household)
     cleaned = (description_contains or "").strip()
     if not cleaned:
@@ -592,7 +592,7 @@ def unsaved_rule(
         raise ValidationError("The minimum amount must be at most the maximum.")
     category = assignable_categories(person).filter(pk=category_id).first()
     if category is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     rule = CategoryRule(
         description_contains=cleaned,
         min_amount_minor=min_amount_minor,
@@ -614,7 +614,7 @@ def preview_unsaved_rule(principal, rule):
     Same candidates and precedence as preview_rule. A new rule sorts after existing
     rules of equal priority, so it wins only where nothing matches earlier.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     matches = []
     rows = _preview_rows(person, rule)
     rules_by_account = _rules_by_account(rows)
@@ -786,7 +786,7 @@ def rule_note_matches(principal, rule):
     plus any an untracked-transfer rule already marked, that still need the line."""
     if not rule.note:
         return []
-    person = _person_for(principal)
+    person = require_person(principal)
     return rows_needing_line(_winning_rows(_preview_rows(person, rule, for_note=True), rule), rule.note)
 
 
@@ -818,7 +818,7 @@ def apply_enabled_rules_to_transactions(principal, transactions):
     """Apply enabled rules to newly imported rows. Call after transfer refresh."""
     if not transactions:
         return []
-    person = _person_for(principal)
+    person = require_person(principal)
     # Same eligibility as preview and manual apply: active cash-flow rows that
     # are not excluded as transfers or card payments and are not refunds. A
     # category rule also skips hand-set categories; an untracked-transfer rule
@@ -940,10 +940,10 @@ def _apply_automatic_rule_groups(person, by_rule):
 
 @transaction.atomic
 def reverse_application(principal, application_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     application = _reversible_applications(person).select_related("rule").filter(pk=application_id).first()
     if application is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if application.reversed_at is not None:
         return ReverseResult(restored=0, skipped_manual=0)
     # Only rows this person can see are reversed now. Rows hidden from them
@@ -1103,7 +1103,7 @@ def _category_before(entry, application):
 
 
 def list_visible_rules(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     rules = list(
         CategoryRule.objects.visible_to(person)
         .select_related("category", "account", "owner_person", "owner_household")
@@ -1138,7 +1138,7 @@ def list_unreachable_applications(principal):
     Each item carries only the date and the number of this person's rows, never
     the hidden rule's text or category.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     visible_rules = CategoryRule.objects.visible_to(person).values("pk")
     pending = _pending_entries_visible_to(person).exclude(application__rule_id__in=visible_rules)
     counts = {}
@@ -1153,7 +1153,7 @@ def list_unreachable_applications(principal):
 
 
 def list_visible_applications(principal, rule):
-    person = _person_for(principal)
+    person = require_person(principal)
     return list(
         RuleApplication.objects.visible_to(person)
         .filter(rule=rule)

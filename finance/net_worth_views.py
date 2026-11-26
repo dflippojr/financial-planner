@@ -10,7 +10,8 @@ from django.views.decorators.http import require_GET, require_http_methods
 
 from . import account_sort
 from .access import request_person
-from .account_views import _active_visible_account, _service_or_404
+from .account_views import _active_visible_account
+from .access import service_or_404
 from .calculated_balances import (
     CalculationError,
     calculate,
@@ -237,7 +238,7 @@ def account_balances_calculate(request, account_id):
 @never_cache
 def account_calculated_delete(request, account_id):
     account = _active_visible_account(request.user, account_id)
-    deleted = _service_or_404(lambda: delete_calculated_balances(request.user, account.pk))
+    deleted = service_or_404(lambda: delete_calculated_balances(request.user, account.pk))
     messages.success(request, f"Deleted {deleted} calculated balance{'' if deleted == 1 else 's'}.")
     return redirect("account-balances", account.pk)
 
@@ -289,7 +290,7 @@ def account_snapshot_edit(request, account_id, snapshot_id):
 @never_cache
 def account_snapshot_delete(request, account_id, snapshot_id):
     account, _snapshot = _visible_manual_snapshot(request.user, account_id, snapshot_id)
-    _service_or_404(lambda: delete_manual_snapshot(request.user, account_id, snapshot_id))
+    service_or_404(lambda: delete_manual_snapshot(request.user, account_id, snapshot_id))
     messages.success(request, "Deleted estimate." if account.is_physical_asset() else "Deleted balance.")
     return redirect("account-balances", account_id)
 

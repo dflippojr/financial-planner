@@ -12,7 +12,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, connection, models, transaction
 
 from .audit_models import ACTION_SPECS, AUDIENCE_ACCOUNT, AUDIENCE_DELETION, AUDIENCE_FLEXIBLE, AUDIENCE_PERSONAL
-from .models import Account, AuditEvent, Membership, _person_for
+from .models import Account, AuditEvent, Membership, person_for
 
 
 logger = logging.getLogger(__name__)
@@ -86,11 +86,11 @@ def append_event(*, action, account=None, actor=None, actor_kind=AuditEvent.Acto
             if target_type == AuditEvent.TargetType.ACCOUNT:
                 target_id = account.pk
         elif private_owner is not None:
-            person = _person_for(principal)
+            person = person_for(principal)
             allowed_audience = verified or (person is not None and person.pk == private_owner.pk)
             private_owner_id = private_owner.pk
         else:
-            person = _person_for(principal)
+            person = person_for(principal)
             allowed_audience = verified or (person is not None and Membership.objects.filter(
                 person=person, household=household, ended_at__isnull=True).exists())
             household_id = household.pk
@@ -202,7 +202,7 @@ def record(actor, action, target_type, target_id, *, audience, fields=(), metada
         if current.proposal_id is not None:
             metadata.setdefault("proposal_id", current.proposal_id)
     return append_event(
-        actor=_person_for(actor), action=action, target_type=target_type, target_id=target_id,
+        actor=person_for(actor), action=action, target_type=target_type, target_id=target_id,
         changed_fields=fields, metadata=metadata, source=source or AuditEvent.Source.UI,
         correlation_id=correlation_id, verified=verified, **audience,
     )
@@ -214,7 +214,7 @@ CORRECTION_FIELDS = {"category": "category", "refund_link": "refund", "untracked
 def record_correction(txn, actor, history):
     """One event per user-driven correction, referencing the existing history row."""
     field = CORRECTION_FIELDS.get(history.field_name)
-    person = _person_for(actor) if actor is not None else None
+    person = person_for(actor) if actor is not None else None
     current = audit_origin.get()
     if field is None or person is None or (current is not None and not current.per_row):
         return
@@ -232,7 +232,7 @@ def record_download(principal, *, export_kind, section=None, receipt=None):
 
     Own transaction: downloads are read-only, so only the event is written.
     """
-    person = _person_for(principal)
+    person = person_for(principal)
     if person is None:
         raise PermissionDenied("Operation is not permitted.")
     metadata = {"export_kind": export_kind}

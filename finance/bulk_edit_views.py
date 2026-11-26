@@ -5,8 +5,8 @@ from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 
-from .access import first_message as _first_message
-from .access import service_or_404 as _service_or_404
+from .access import first_message
+from .access import service_or_404
 from .bulk_edit_services import (
     BULK_EDIT_CAP,
     SKIP_LABELS,
@@ -67,7 +67,7 @@ def bulk_edit_preview(request):
     except PermissionDenied as exc:
         raise Http404 from exc
     except ValidationError as exc:
-        messages.error(request, _first_message(exc, "The bulk edit could not be previewed."))
+        messages.error(request, first_message(exc, "The bulk edit could not be previewed."))
         return redirect("transaction-list")
     skips = [
         {"reason": reason, "label": SKIP_LABELS.get(reason, reason), "count": count}
@@ -101,11 +101,11 @@ def bulk_edit_apply(request):
     posted_eligible = form.data.getlist("eligible_id")
     kwargs["expected_eligible_ids"] = posted_eligible or None
     try:
-        preview, undo = _service_or_404(
+        preview, undo = service_or_404(
             lambda: apply_bulk_edit(request.user, matching=matching, **kwargs)
         )
     except ValidationError as exc:
-        messages.error(request, _first_message(exc, "The bulk edit could not be applied."))
+        messages.error(request, first_message(exc, "The bulk edit could not be applied."))
         return redirect("transaction-list")
     request.session["bulk_edit_undo_id"] = str(undo.pk)
     count = len(preview.eligible_ids)
@@ -117,9 +117,9 @@ def bulk_edit_apply(request):
 @never_cache
 def bulk_edit_undo(request, undo_id):
     try:
-        _service_or_404(lambda: undo_bulk_edit(request.user, undo_id))
+        service_or_404(lambda: undo_bulk_edit(request.user, undo_id))
     except ValidationError as exc:
-        messages.error(request, _first_message(exc, UNDO_UNAVAILABLE))
+        messages.error(request, first_message(exc, UNDO_UNAVAILABLE))
         return redirect("transaction-list")
     request.session.pop("bulk_edit_undo_id", None)
     messages.success(request, "Bulk edit undone.")

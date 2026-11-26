@@ -18,7 +18,7 @@ from .base import (
     validate_reason_list,
     validate_saved_filter_query,
 )
-from .people import Person, person_for as _person_for
+from .people import Person, person_for
 from .categories import Category, Tag
 from .accounts import Account, ImportBatch
 
@@ -224,7 +224,7 @@ class SavedTransactionFilter(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(member=person)
@@ -295,7 +295,7 @@ class TransactionCorrectionHistory(models.Model):
                 Q(leg_a_id=models.OuterRef("transaction_id")) | Q(leg_b_id=models.OuterRef("transaction_id"))
             ).exclude(leg_a_id__in=visible_transactions, leg_b_id__in=visible_transactions)
             return self.filter(
-                Q(only_for__isnull=True) | Q(only_for=_person_for(principal)),
+                Q(only_for__isnull=True) | Q(only_for=person_for(principal)),
                 transaction_id__in=visible_transactions,
             ).exclude(Q(field_name=self.model.Field.EXCLUSION) & models.Exists(pair_with_hidden_leg))
 
@@ -497,7 +497,7 @@ class RefundLink(models.Model):
         def visible_to(self, principal):
             visible_transactions = Transaction.objects.visible_to(principal).values("pk")  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as for the other visible_to calls in the baseline
             return self.filter(refund_id__in=visible_transactions, original_id__in=visible_transactions).exclude(
-                pk__in=RefundLinkDrop.objects.filter(person=_person_for(principal)).values("link_id")
+                pk__in=RefundLinkDrop.objects.filter(person=person_for(principal)).values("link_id")
             )
 
     objects = QuerySet.as_manager()
@@ -550,7 +550,7 @@ class BulkEditUndo(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(actor=person)

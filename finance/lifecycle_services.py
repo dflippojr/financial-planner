@@ -3,8 +3,8 @@ from django.db import transaction
 from django.db.models import ProtectedError, Q
 from django.utils import timezone
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .account_locks import AccountSetGrew as _AccountSetGrew
 from .account_locks import holding_accounts, lock_account, lock_accounts, update_accounts
 from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
@@ -95,14 +95,14 @@ def _visible_account_for_update(principal, account_id, **annotations):
     """Lock a visible account; `annotations` are read in the same query."""
     account = lock_account(account_id, queryset=Account.objects.visible_to(principal).annotate(**annotations))
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return account
 
 
 def _parsed_share_mode(share_mode):
     if share_mode in (Account.ShareMode.CO_OWNED, Account.ShareMode.LENT):
         return share_mode
-    raise PermissionDenied(_DENIED)
+    raise PermissionDenied(DENIED)
 
 
 def _lock_ledgers(account_ids):
@@ -174,7 +174,7 @@ def _lock_visible_account_for_refund_link_rule(person, account_id):
 @transaction.atomic
 def share_account(principal, account_id, share_mode):
     """Share the actor's private account with their current household."""
-    person = _person_for(principal)
+    person = require_person(principal)
     membership, _memberships = lock_actor_household(person)
     account = _lock_visible_account_for_refund_link_rule(person, account_id)
     _lock_ledgers((account.pk,))
@@ -184,7 +184,7 @@ def share_account(principal, account_id, share_mode):
         or account.owner_id != person.pk
         or account.scope != Account.Scope.PRIVATE
     ):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
 
     account.scope = Account.Scope.HOUSEHOLD
     account.household = membership.household
@@ -201,7 +201,7 @@ def share_account(principal, account_id, share_mode):
 @transaction.atomic
 def change_account_share_mode(principal, account_id, share_mode, *, confirm_give_up_ownership=False):
     """Switch a household account between co-owned and lent. Owner only."""
-    person = _person_for(principal)
+    person = require_person(principal)
     membership, _memberships = lock_actor_household(person)
     account = _lock_visible_account_for_refund_link_rule(person, account_id)
     _lock_ledgers((account.pk,))
@@ -212,12 +212,12 @@ def change_account_share_mode(principal, account_id, share_mode, *, confirm_give
         or account.household_id != membership.household_id
         or account.owner_id != person.pk
     ):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if account.share_mode == mode:
         return account
     if account.share_mode == Account.ShareMode.LENT and mode == Account.ShareMode.CO_OWNED:
         if not confirm_give_up_ownership:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
 
     account.share_mode = mode
     account.save(update_fields=("share_mode", "updated_at"))
@@ -294,11 +294,11 @@ def create_account(person, *, name, account_type, household=None, share_mode="")
 @transaction.atomic
 def rename_account(principal, account_id, name):
     """Rename an active account the actor can still see once the locks are held."""
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     renamed = account.name != name
     account.name = name
     account.save(update_fields=("name", "updated_at"))
@@ -310,13 +310,13 @@ def rename_account(principal, account_id, name):
 @transaction.atomic
 def update_debt_terms(principal, account_id, *, apr_percent, minimum_payment_minor, payment_day):
     """Save APR, minimum payment, and loan due day for a visible liability."""
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
     if account.status != Account.Status.ACTIVE or account.archived_at is not None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if account.account_type not in Account.LIABILITY_TYPES:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if account.account_type != Account.Type.LOAN:
         payment_day = None
     elif payment_day is not None and not 1 <= int(payment_day) <= 31:
@@ -344,10 +344,10 @@ def update_debt_terms(principal, account_id, *, apr_percent, minimum_payment_min
 @transaction.atomic
 def unshare_account(principal, account_id):
     """Return a visible household account to its owner's private scope."""
-    person = _person_for(principal)
+    person = require_person(principal)
     membership, _memberships = lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     account = _lock_visible_account_with_pair_counterparts(person, account_id)
     _lock_ledgers((account.pk,))
     if (
@@ -356,7 +356,7 @@ def unshare_account(principal, account_id):
         or account.household_id != membership.household_id
         or not _actor_may_manage_sharing(person, account)
     ):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
 
     _make_account_private(account, audit_actor=person)
     _release_simplefin_links_without_access((account.pk,), initiator=person)
@@ -371,14 +371,14 @@ def unshare_account(principal, account_id):
 @transaction.atomic
 def archive_account(principal, account_id):
     """Soft-delete a visible account and every active provenance row beneath it."""
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id)
     _lock_ledgers((account.pk,))
     if account.scope == Account.Scope.HOUSEHOLD and not _actor_may_manage_sharing(person, account):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     now = timezone.now()
 
     ImportBatch.objects.select_for_update().filter(
@@ -418,7 +418,7 @@ def end_current_membership(person, *, audit_actor=None):
     """
     own_membership, current_memberships = lock_actor_household(person)
     if own_membership is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
 
     remaining_memberships = sorted(
         (
@@ -567,7 +567,7 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
 
 def leave_household(principal):
     """End the actor's current membership and apply shared-account exit rules."""
-    person = _person_for(principal)
+    person = require_person(principal)
     end_current_membership(person, audit_actor=person)
 
 
@@ -695,15 +695,15 @@ def _delete_rule_history_for_account(account, tx_ids):
 @transaction.atomic
 def delete_account(principal, account_id):
     """Permanently delete an account and every row that belongs to it."""
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     if not Account.objects.visible_to(person).filter(pk=account_id).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     account = _lock_visible_account_with_pair_and_refund_counterparts(person, account_id)
     if account.owner_id != person.pk:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if not Account.objects.visible_to(person).filter(pk=account.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     kept_id = account.pk
     name = account.name
     append_event(account=account, action=AuditEvent.Action.ACCOUNT_DELETED, actor=person)
@@ -1103,7 +1103,7 @@ def _lock_memberships_of_households(own_membership_id, household_ids):
 
 @transaction.atomic
 def _delete_member_data_once(principal, lent_choices, known_accounts, known_households):
-    person = _person_for(principal)
+    person = require_person(principal)
     user = person.user
     lent, submitted = _parsed_lent_choices(person, lent_choices)
     reference_id, reference_household_id = Membership.objects.filter(

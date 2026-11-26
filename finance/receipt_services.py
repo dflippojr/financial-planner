@@ -11,10 +11,10 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .audit_services import record
 from .lifecycle_services import lock_actor_household
-from .models import Account, AuditEvent, Person, Receipt, Transaction, _person_for
+from .models import Account, AuditEvent, Person, Receipt, Transaction, person_for
 from .account_locks import lock_account
 
 _REJECTED = "That file could not be attached."
@@ -50,7 +50,7 @@ def is_stored_receipt_name(stored_name: str) -> bool:
 
 def stored_receipt_path(stored_name: str) -> Path:
     if not is_stored_receipt_name(stored_name):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return receipts_root() / stored_name
 
 
@@ -178,7 +178,7 @@ def remove_receipt(principal, transaction_id, receipt_id):
         .first()
     )
     if receipt is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     target_id = receipt.pk
     receipt.delete()
     record(person, AuditEvent.Action.RECEIPT_REMOVED, AuditEvent.TargetType.RECEIPT, target_id,
@@ -196,9 +196,9 @@ def visible_receipt_or_none(principal, transaction_id, receipt_id) -> Receipt | 
 
 
 def _require_person(principal) -> Person:
-    person = principal if isinstance(principal, Person) else _person_for(principal)
+    person = principal if isinstance(principal, Person) else person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return person
 
 
@@ -206,20 +206,20 @@ def _lock_editable_transaction(person, transaction_id) -> Transaction:
     if not Transaction.objects.visible_to(person).filter(
         pk=transaction_id, status=Transaction.Status.ACTIVE
     ).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     seed = Transaction.objects.filter(pk=transaction_id).values("account_id").first()
     if seed is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     account = lock_account(seed["account_id"], queryset=Account.objects.visible_to(person))
     if account is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     financial_transaction = (
         Transaction.objects.select_for_update()
         .filter(pk=transaction_id, account=account, status=Transaction.Status.ACTIVE)
         .first()
     )
     if financial_transaction is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return financial_transaction
 
 

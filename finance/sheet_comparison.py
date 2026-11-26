@@ -15,8 +15,8 @@ from django.urls import reverse
 from django.db import transaction
 from django.utils import timezone
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .cash_flow import default_date_range, format_minor, selected_accounts
 from .ledger_counting import income_and_spending_totals
 from .models import SheetComparisonSettings, SheetMonthTotal
@@ -166,7 +166,7 @@ def parsed_month_totals(rows, mapping):
 
 @transaction.atomic
 def save_mapping(principal, *, month_column, income_column, spending_column, spending_sign, headers):
-    person = _person_for(principal)
+    person = require_person(principal)
     columns = (month_column, income_column, spending_column)
     if len(set(columns)) != 3:
         raise SheetCsvError("Choose three different columns.")
@@ -192,7 +192,7 @@ def save_mapping(principal, *, month_column, income_column, spending_column, spe
 
 @transaction.atomic
 def store_month_totals(principal, by_month, source):
-    person = _person_for(principal)
+    person = require_person(principal)
     source_name = _source_name(source)
     kept_notes = {
         item.month: item.note
@@ -216,7 +216,7 @@ def store_month_totals(principal, by_month, source):
 
 
 def set_tolerance(principal, tolerance_minor):
-    person = _person_for(principal)
+    person = require_person(principal)
     if tolerance_minor is None or tolerance_minor < 0:
         raise SheetCsvError("Tolerance must be zero or greater.")
     settings_row = SheetComparisonSettings.objects.visible_to(person).first()
@@ -228,11 +228,11 @@ def set_tolerance(principal, tolerance_minor):
 
 
 def save_month_note(principal, month, note):
-    person = _person_for(principal)
+    person = require_person(principal)
     month = month_start(month)
     row = SheetMonthTotal.objects.visible_to(person).filter(month=month).first()
     if row is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     row.note = note or ""
     row.save(update_fields=("note", "updated_at"))
     return row
@@ -240,7 +240,7 @@ def save_month_note(principal, month, note):
 
 @transaction.atomic
 def delete_comparison_data(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     SheetMonthTotal.objects.visible_to(person).delete()
     SheetComparisonSettings.objects.visible_to(person).delete()
 
@@ -266,7 +266,7 @@ def _month_transactions_url(window, *, account=None, scope="", tag=None):
 
 
 def comparison_rows(principal, *, account=None, scope="", tag=None, today=None):
-    person = _person_for(principal)
+    person = require_person(principal)
     today = today or timezone.localdate()
     settings_row = SheetComparisonSettings.objects.visible_to(person).first()
     tolerance = settings_row.tolerance_minor if settings_row else DEFAULT_TOLERANCE_MINOR
