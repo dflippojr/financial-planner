@@ -381,3 +381,57 @@ def test_garbage_in_the_undone_parameter_is_ignored():
     excluded = _forms(_excluded_section(response.content.decode()))
     assert (pairs[0].pk, "restore") in excluded
     assert len(excluded) == 3
+
+
+def test_ten_fast_clicks_stay_on_one_pair_when_undo_brings_a_competing_suggestion():
+    """Undo frees a leg another credit also matches; the new suggestion must not shift the spot (#820 review)."""
+    owner, _member, _household, _checking, card, _private, pairs = _world(pair_count=3)
+    _spread_timestamps(pairs)
+    newest = pairs[-1]
+    checking_leg = Transaction.objects.get(pk=newest.leg_a_id)
+    make_transaction(
+        owner, card, amount_minor=-checking_leg.amount_minor, transaction_date=checking_leg.transaction_date,
+        description="SYN SECOND CREDIT", fingerprint="e" * 64,
+    )
+    refresh_transfer_pairs(owner)
+    assert not TransferPair.objects.filter(status=TransferPair.Status.SUGGESTED).exists()
+    client = _client(owner)
+    start = _statuses()
+    url = reverse("transfer-review")
+    page = client.get(url)
+    spot = next(i for i, (_pk, action) in enumerate(_forms(page.content.decode())) if action == "undo")
+    assert _forms(page.content.decode())[spot][0] == newest.pk
+    for _click in range(10):
+        pair_id, action = _forms(page.content.decode())[spot]
+        assert pair_id == newest.pk
+        page = client.post(url, {"action": action, "pair_id": pair_id}, follow=True)
+        assert page.status_code == 200
+        url = page.redirect_chain[-1][0]
+
+    changed = {pk for pk in start if TransferPair.objects.filter(pk=pk).exclude(status=start[pk]).exists()}
+    assert changed <= {newest.pk}
+    assert not TransferPair.objects.filter(
+        status__in=(TransferPair.Status.CONFIRMED, TransferPair.Status.AUTO_MARKED)
+    ).exclude(pk__in=start).exists()
+
+
+@pytest.mark.parametrize("action", ["confirm", "dismiss"])
+def test_an_action_on_a_suggestion_restore_deleted_meanwhile_is_refused_not_a_500(action):
+    """A Confirm or Dismiss that read the suggestion before Restore deleted it (#820 review)."""
+    from unittest.mock import patch
+
+    from finance import transfer_pairing
+
+    owner, *_rest, pairs = _world(pair_count=1)
+    pair = pairs[0]
+    TransferPair.objects.filter(pk=pair.pk).update(status=TransferPair.Status.SUGGESTED)
+    name = "lock_accounts_and_transactions" if action == "confirm" else "lock_actor_household"
+    original = getattr(transfer_pairing, name)
+
+    def delete_then_lock(*args, **kwargs):
+        TransferPair.objects.filter(pk=pair.pk).delete()
+        return original(*args, **kwargs)
+
+    with patch.object(transfer_pairing, name, side_effect=delete_then_lock):
+        response = _client(owner).post(reverse("transfer-review"), {"action": action, "pair_id": pair.pk})
+    assert response.status_code == 404

@@ -753,6 +753,20 @@ def _record_pair_event(person, leg, action, pair):
            metadata={"transaction_id": other.pk})
 
 
+def _relocked_pair(pair, statuses):
+    """The pair row under lock, refused if it changed or vanished while this request waited.
+
+    Restore deletes competing suggestions, and two quick clicks race, so a pair
+    read before the locks may be gone or settled once they are held.
+    """
+    locked = TransferPair.objects.select_for_update(of=("self",)).filter(pk=pair.pk).first()
+    if locked is None or locked.status not in statuses:
+        raise PermissionDenied(DENIED)
+    # Keep the legs already loaded with their accounts for the audit event.
+    locked.leg_a, locked.leg_b = pair.leg_a, pair.leg_b
+    return locked
+
+
 @transaction.atomic
 def confirm_transfer_pair(principal, pair_id):
     person, pair = _visible_pair(principal, pair_id)
@@ -762,7 +776,7 @@ def confirm_transfer_pair(principal, pair_id):
     left, right = locked[0], locked[1]
     if not _is_candidate(left, right):
         raise PermissionDenied(DENIED)
-    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    pair = _relocked_pair(pair, (TransferPair.Status.SUGGESTED,))
     _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
     _record_pair_event(person, left, AuditEvent.Action.RECORD_ENABLED, pair)
     return pair
@@ -774,7 +788,7 @@ def dismiss_transfer_pair(principal, pair_id):
     if pair.status != TransferPair.Status.SUGGESTED:
         raise PermissionDenied(DENIED)
     lock_actor_household(person)
-    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    pair = _relocked_pair(pair, (TransferPair.Status.SUGGESTED,))
     pair.status = TransferPair.Status.DISMISSED
     pair.save(update_fields=("status", "updated_at"))
     _record_pair_event(person, pair.leg_a, AuditEvent.Action.RECORD_DISABLED, pair)
@@ -790,7 +804,7 @@ def undo_transfer_pair(principal, pair_id):
     by_id = {item.pk: item for item in locked}
     left = by_id[pair.leg_a_id]
     right = by_id[pair.leg_b_id]
-    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    pair = _relocked_pair(pair, _MARKED_PAIR_STATUSES)
     _unmark_exclusion(pair, left, right, person)
     pair.undone_at = timezone.now()
     pair.undone_by = person
@@ -835,8 +849,8 @@ def restore_transfer_pair(principal, pair_id):
         raise PermissionDenied(DENIED)
     locked = lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
     left, right = locked[0], locked[1]
-    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
-    if pair.status != TransferPair.Status.UNDONE or pair.undone_at is None:
+    pair = _relocked_pair(pair, (TransferPair.Status.UNDONE,))
+    if pair.undone_at is None:
         raise PermissionDenied(DENIED)
     if not _is_candidate(left, right) or _leg_excluded_elsewhere(pair, left, right):
         raise PermissionDenied(DENIED)

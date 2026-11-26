@@ -283,7 +283,15 @@ def transfer_review(request):
     kept_in_place = Q(pk__in=kept, status=TransferPair.Status.UNDONE, undone_at__isnull=False)
     # Ordered by a key no action changes, so a row never moves under the cursor (#635).
     exclusions = list(visible.filter(marked | kept_in_place).order_by("-created_at", "-pk"))
-    suggestions = visible.filter(status=TransferPair.Status.SUGGESTED).order_by("-created_at", "-pk")
+    # A suggestion on a leg of a pair kept in place came from that Undo's refresh.
+    # Listing it above would push the Restore button down under the cursor, and
+    # Restore deletes it anyway, so it waits for the next visit to the page.
+    kept_legs = {leg for pair in exclusions if not pair.is_active_exclusion for leg in (pair.leg_a_id, pair.leg_b_id)}  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+    suggestions = list(
+        visible.filter(status=TransferPair.Status.SUGGESTED)
+        .exclude(Q(leg_a_id__in=kept_legs) | Q(leg_b_id__in=kept_legs))
+        .order_by("-created_at", "-pk")
+    )
     return render(
         request,
         "finance/transfer_review.html",
