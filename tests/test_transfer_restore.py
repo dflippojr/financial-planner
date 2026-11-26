@@ -435,3 +435,35 @@ def test_an_action_on_a_suggestion_restore_deleted_meanwhile_is_refused_not_a_50
     with patch.object(transfer_pairing, name, side_effect=delete_then_lock):
         response = _client(owner).post(reverse("transfer-review"), {"action": action, "pair_id": pair.pk})
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("action", ["undo", "restore", "confirm"])
+def test_the_audit_event_follows_leg_scopes_read_under_the_lock(action):
+    """A leg's account made private while the action waited must not land on the shared leg's event (#820 review)."""
+    from unittest.mock import patch
+
+    from finance import transfer_pairing
+
+    owner, _member, _household, checking, card, _private, pairs = _world(pair_count=1)
+    pair = pairs[0]
+    assert Transaction.objects.get(pk=pair.leg_a_id).account_id == checking.pk
+    if action == "restore":
+        undo_transfer_pair(owner, pair.pk)
+    elif action == "confirm":
+        TransferPair.objects.filter(pk=pair.pk).update(status=TransferPair.Status.SUGGESTED)
+    original = transfer_pairing.lock_accounts_and_transactions
+
+    def unshare_card_then_lock(*args, **kwargs):
+        Account.objects.filter(pk=card.pk).update(scope=Account.Scope.PRIVATE, household=None, share_mode="")
+        return original(*args, **kwargs)
+
+    service = {"undo": undo_transfer_pair, "restore": _restore,
+               "confirm": transfer_pairing.confirm_transfer_pair}[action]
+    before = set(AuditEvent.objects.values_list("pk", flat=True))
+    with patch.object(transfer_pairing, "lock_accounts_and_transactions", side_effect=unshare_card_then_lock):
+        service(owner, pair.pk)
+    event = AuditEvent.objects.exclude(pk__in=before).get(target_type=AuditEvent.TargetType.TRANSACTION)
+    # The member sees the checking leg but no longer the card leg, so the event
+    # belongs on the card's now-private account, never on the shared one.
+    assert event.account_id == card.pk
+    assert event.household_id is None
