@@ -38,6 +38,7 @@ GENERIC_LOCKS = {
     ("finance/ai/jobs.py", "_lock_qs"): "AiJob querysets only",
     ("finance/auth_services.py", "accept_invitation"): "Invitation rows",
     ("finance/auth_services.py", "lock_first_member_creation"): "the user model",
+    ("finance/break_glass.py", "locked_grant_for_redeeming"): "BreakGlassGrant rows, of=self (joins the user model only)",
     ("finance/chat/cleanup_cards.py", "_locked"): "RecurringSeries, TransferPair and CategorySuggestion rows, of=self",
     ("finance/chat/proposals.py", "_apply_planned_row"): "PlannedItem rows",
     ("finance/chat/proposals.py", "_apply_goal_row"): "SavingsGoal rows",
