@@ -271,6 +271,16 @@ def serve(directory):
     from tests.fake_harness import start_fake_harness
     from tests.mobile_seed import seed_phone_data
 
+    # Finish the request path's and the chat worker's imports here, before
+    # any thread starts (#818). Otherwise the first request loads the URLconf
+    # (finance.forms package first) while the chat thread imports
+    # finance.chat_runner (finance.forms.planning submodule first), and an
+    # interpreter that locks a submodule before its parent (CPython 3.14)
+    # deadlocks on the module import locks.
+    from django.urls import get_resolver
+    import finance.chat_runner  # noqa: F401 - imported for its side effect only
+    get_resolver().url_patterns  # noqa: B018 - loads the URLconf now
+
     call_command("migrate", interactive=False, verbosity=0)
     person = seed_phone_data()
     person.user.set_password(PASSWORD)
