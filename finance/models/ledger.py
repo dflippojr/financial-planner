@@ -415,6 +415,10 @@ class TransferPair(models.Model):
     reasons = models.JSONField(validators=(validate_reason_list,))
     leg_a_category_id_at_mark = models.PositiveIntegerField(null=True, blank=True)
     leg_b_category_id_at_mark = models.PositiveIntegerField(null=True, blank=True)
+    # Set only when a member undoes the pair (#635), so only those pairs can be
+    # restored; a suggestion that revalidation retires as UNDONE leaves them null.
+    undone_at = models.DateTimeField(null=True, blank=True)
+    undone_by = models.ForeignKey(Person, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -1,4 +1,4 @@
-"""Transfer and card-payment pairing: find, score, auto-mark, revalidate, confirm, dismiss and undo.
+"""Transfer and card-payment pairing: find, score, auto-mark, revalidate, confirm, dismiss, undo and restore.
 
 Not to be confused with loan-to-asset pairing in loan_asset_pairing.py.
 """
@@ -14,6 +14,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from .access import DENIED
 from .access import require_person
@@ -49,6 +50,10 @@ from .refund_links import (
     restore_refund_links_for_pair,
 )
 
+
+# The Transfers page offers Restore for pairs undone this recently, this many at most (#635).
+RECENTLY_UNDONE_DAYS = 30
+RECENTLY_UNDONE_LIMIT = 50
 
 _PAIR_CACHE: ContextVar[dict | None] = ContextVar("pair_cache", default=None)
 
@@ -787,5 +792,62 @@ def undo_transfer_pair(principal, pair_id):
     right = by_id[pair.leg_b_id]
     pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     _unmark_exclusion(pair, left, right, person)
+    pair.undone_at = timezone.now()
+    pair.undone_by = person
+    pair.save(update_fields=("undone_at", "undone_by", "updated_at"))
     _record_pair_event(person, left, AuditEvent.Action.RECORD_DISABLED, pair)
+    return pair
+
+
+def _pairs_on_legs(pair, statuses):
+    legs = (pair.leg_a_id, pair.leg_b_id)  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+    return (
+        TransferPair.objects.filter(Q(leg_a_id__in=legs) | Q(leg_b_id__in=legs), status__in=statuses)
+        .exclude(pk=pair.pk)
+    )
+
+
+def _leg_excluded_elsewhere(pair, left, right):
+    # Not limited to pairs the member can see: a pair through another member's
+    # private account excludes the leg all the same, and a second exclusion
+    # would change totals.
+    if left.untracked_transfer or right.untracked_transfer:
+        return True
+    return _pairs_on_legs(pair, _MARKED_PAIR_STATUSES).exists()
+
+
+def recently_undone_pairs(principal):
+    """Pairs a member undid in the last 30 days that this viewer can see, newest first."""
+    since = timezone.now() - timedelta(days=RECENTLY_UNDONE_DAYS)
+    return (
+        visible_rows(TransferPair, principal)
+        .filter(status=TransferPair.Status.UNDONE, undone_at__gte=since)
+        .select_related("leg_a", "leg_b", "leg_a__account", "leg_b__account")
+        .order_by("-undone_at", "-pk")[:RECENTLY_UNDONE_LIMIT]
+    )
+
+
+@transaction.atomic
+def restore_transfer_pair(principal, pair_id):
+    """Confirm again a pair a member undid, if both legs still pair and nothing else excludes them (#635)."""
+    person, pair = _visible_pair(principal, pair_id)
+    if pair.status != TransferPair.Status.UNDONE or pair.undone_at is None:
+        raise PermissionDenied(DENIED)
+    locked = lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
+    left, right = locked[0], locked[1]
+    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    if pair.status != TransferPair.Status.UNDONE or pair.undone_at is None:
+        raise PermissionDenied(DENIED)
+    if not _is_candidate(left, right) or _leg_excluded_elsewhere(pair, left, right):
+        raise PermissionDenied(DENIED)
+    # A suggestion found for a leg while the pair was undone would let a later
+    # Confirm exclude that leg twice. Retire it, as refresh never suggests a pair
+    # on a leg that is already excluded.
+    for competing in _pairs_on_legs(pair, (TransferPair.Status.SUGGESTED,)).select_for_update(of=("self",)).order_by("pk"):
+        _invalidate_suggestion(competing)
+    _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
+    pair.undone_at = None
+    pair.undone_by = None
+    pair.save(update_fields=("undone_at", "undone_by", "updated_at"))
+    _record_pair_event(person, left, AuditEvent.Action.RECORD_ENABLED, pair)
     return pair

@@ -598,6 +598,7 @@ PROBE = {
     "suggestion_id": "suggestion",
     "transaction_id": "charges",
     "eligible_id": "charges",
+    "undone": "undone_pair",
 }
 
 FILTERS = ("account", "tag", "scope")
@@ -721,11 +722,14 @@ PAGE_ROUTES = {
         owner_canary=True,
     ),
     "transfer-review": PageRoute(
+        # The page keeps undone pairs named here in place (#635).
+        query=("undone",),
         actions={
             "confirm": _pair_action("confirm", "suggested_pair"),
             "dismiss": _pair_action("dismiss", "suggested_pair"),
             "undo": _pair_action("undo", "marked_pair"),
-        }
+            "restore": _pair_action("restore", "undone_pair"),
+        },
     ),
     "recurring-review": PageRoute(
         query=("merge_series", "add_series"), owner_canary=True, actions=RECURRING_ACTIONS
@@ -1146,9 +1150,10 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
 
 
 def _transfer_pairs(side, when, index):
-    """A suggested and an auto-marked card payment from the side's checking account to its card."""
+    """A suggested, an auto-marked and a member-undone card payment from the side's checking account to its card."""
     pairs = []
-    for offset, status in enumerate((TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED)):
+    statuses = (TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED, TransferPair.Status.UNDONE)
+    for offset, status in enumerate(statuses):
         amount = 5_150 + 100 * offset
         legs = [
             seed_transaction(
@@ -1164,9 +1169,13 @@ def _transfer_pairs(side, when, index):
                 kind=TransferPair.Kind.CARD_PAYMENT,
                 confidence=TransferPair.Confidence.HIGH,
                 reasons=["synthetic"],
+                **(
+                    {"undone_at": timezone.now(), "undone_by": side.owner}
+                    if status == TransferPair.Status.UNDONE else {}
+                ),
             )
         )
-    side.suggested_pair, side.marked_pair = pairs
+    side.suggested_pair, side.marked_pair, side.undone_pair = pairs
 
 
 def _series(person, name, status, members, index, cancelled_at=None):

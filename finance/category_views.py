@@ -1,9 +1,13 @@
 """Tags, categories and the transfer review."""
 
 
+from urllib.parse import urlencode
+
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
@@ -29,9 +33,13 @@ from .tag_services import (
 from .category_services import add_category, ensure_household_categories, rename_category
 from .households import current_household
 from .transfer_pairing import (
+    RECENTLY_UNDONE_DAYS,
+    RECENTLY_UNDONE_LIMIT,
     confirm_transfer_pair,
     dismiss_transfer_pair,
+    recently_undone_pairs,
     refresh_transfer_pairs,
+    restore_transfer_pair,
     set_transfer_window_days,
     undo_transfer_pair,
 )
@@ -209,40 +217,79 @@ def category_list(request):
 
 
 
+_TRANSFER_ACTIONS = {
+    "confirm": confirm_transfer_pair,
+    "dismiss": dismiss_transfer_pair,
+    "undo": undo_transfer_pair,
+    "restore": restore_transfer_pair,
+}
+
+
+def _kept_undone_ids(request):
+    """Pair ids the page keeps in place as Undone, from `?undone=1,2` (#635).
+
+    Only ids: the page shows a kept pair only if the viewer can see it and a
+    member undid it, so a forged id shows nothing. Garbage is ignored.
+    """
+    kept = []
+    for part in request.GET.get("undone", "").split(","):
+        if part.strip().isdigit() and int(part) not in kept:
+            kept.append(int(part))
+    return kept[-RECENTLY_UNDONE_LIMIT:]
+
+
+def _transfer_review_url(kept):
+    url = reverse("transfer-review")
+    return f"{url}?{urlencode({'undone': ','.join(map(str, kept))})}" if kept else url
+
+
+def _kept_after(action, pair_id, kept):
+    # An undone pair stays where it was until the page is left; restoring it
+    # puts it back to an ordinary excluded row in the same place.
+    if action == "undo":
+        return [*kept, pair_id][-RECENTLY_UNDONE_LIMIT:]
+    if action == "restore":
+        return [item for item in kept if item != pair_id]
+    return kept
+
+
 @require_http_methods(["GET", "POST"])
 @never_cache
 def transfer_review(request):
+    kept = _kept_undone_ids(request)
     if request.method == "POST":
         try:
             pair_id = int(request.POST.get("pair_id", "0"))
         except (TypeError, ValueError) as exc:
             raise Http404 from exc
         action = request.POST.get("action")
-        actions = {
-            "confirm": confirm_transfer_pair,
-            "dismiss": dismiss_transfer_pair,
-            "undo": undo_transfer_pair,
-        }
-        handler = actions.get(action)
+        handler = _TRANSFER_ACTIONS.get(action or "")
         if handler is None:
             raise Http404
         pair = service_or_404(lambda: handler(request.user, pair_id))
         service_or_404(lambda: refresh_transfer_pairs(
             request.user, transaction_ids=[pair.leg_a_id, pair.leg_b_id]  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute, as in models.py
         ))
-        return redirect("transfer-review")
+        return redirect(_transfer_review_url(_kept_after(action, pair_id, kept)))
     visible = visible_rows(TransferPair, request.user).select_related(
         "leg_a",
         "leg_b",
         "leg_a__account",
         "leg_b__account",
     )
-    exclusions = visible.filter(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED)).order_by(
-        "-updated_at", "-pk"
-    )
-    suggestions = visible.filter(status=TransferPair.Status.SUGGESTED).order_by("-updated_at", "-pk")
+    marked = Q(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED))
+    kept_in_place = Q(pk__in=kept, status=TransferPair.Status.UNDONE, undone_at__isnull=False)
+    # Ordered by a key no action changes, so a row never moves under the cursor (#635).
+    exclusions = list(visible.filter(marked | kept_in_place).order_by("-created_at", "-pk"))
+    suggestions = visible.filter(status=TransferPair.Status.SUGGESTED).order_by("-created_at", "-pk")
     return render(
         request,
         "finance/transfer_review.html",
-        {"exclusions": exclusions, "suggestions": suggestions},
+        {
+            "exclusions": exclusions,
+            "excluded_count": sum(1 for pair in exclusions if pair.is_active_exclusion),
+            "suggestions": suggestions,
+            "recently_undone": list(recently_undone_pairs(request.user)),
+            "recently_undone_days": RECENTLY_UNDONE_DAYS,
+        },
     )
