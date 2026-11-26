@@ -141,6 +141,18 @@ finally:
     assert seen[0]["urlconf"] and seen[0]["chat_runner"], seen[0]
 
 
+def test_preload_thread_imports_loads_the_sign_in_route_and_chat_runner():
+    from django.urls import Resolver404, resolve
+
+    patterns = ui_instance.preload_thread_imports()
+    assert patterns
+    assert "finance.chat_runner" in sys.modules
+    try:
+        resolve("/sign-in/")
+    except Resolver404:
+        pytest.fail("The preloaded URLconf does not route /sign-in/")
+
+
 def test_http_lifecycle_seeds_sign_in_chat_and_authenticated_teardown(monkeypatch, tmp_path):
     # Run the real launcher in a separate interpreter: pytest's initialized
     # Django settings must never replace its fresh file-backed SQLite database.
