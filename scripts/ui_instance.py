@@ -255,6 +255,20 @@ def publish_instance_state(directory, state):
     pending.replace(directory / "instance.json")
 
 
+def preload_thread_imports():
+    """Finish the request path's and the chat worker's imports before threads start (#818).
+
+    Otherwise the first request loads the URLconf (finance.forms package
+    first) while the chat thread imports finance.chat_runner
+    (finance.forms.planning submodule first), and an interpreter that locks a
+    submodule before its parent (CPython 3.14) deadlocks on the module import
+    locks. Returns the loaded URL patterns.
+    """
+    import finance.chat_runner  # noqa: F401 - imported for its side effect only
+    from django.urls import get_resolver
+    return get_resolver().url_patterns
+
+
 def serve(directory):
     env = isolated_environment(directory)
     os.environ.clear()
@@ -270,6 +284,8 @@ def serve(directory):
     from finance.policy_services import accept_policy, publish_policy
     from tests.fake_harness import start_fake_harness
     from tests.mobile_seed import seed_phone_data
+
+    preload_thread_imports()
 
     call_command("migrate", interactive=False, verbosity=0)
     person = seed_phone_data()
