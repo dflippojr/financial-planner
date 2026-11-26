@@ -24,7 +24,7 @@
             <td class="sm:pl-5">{% include "finance/_transfer_pair.html" %}</td>
             <td class="whitespace-nowrap max-md:hidden">{{ pair.get_kind_display }}</td>
             <td class="whitespace-nowrap max-md:hidden">{{ pair.get_confidence_display }}</td>
-            <td>
+            <td class="whitespace-nowrap">
               <div class="flex flex-wrap items-center justify-end gap-2">
                 <form method="post">
                   {% csrf_token %}
@@ -68,7 +68,7 @@
             <td class="sm:pl-5">{% if not pair.is_active_exclusion %}<span class="text-warning">{% include "finance/_status.html" with word="Undone" %}</span> {% endif %}{% include "finance/_transfer_pair.html" %}</td>
             <td class="whitespace-nowrap max-md:hidden">{{ pair.get_kind_display }}</td>
             <td class="whitespace-nowrap max-md:hidden">{% if pair.is_active_exclusion %}{{ pair.get_confidence_display }}{% else %}Counts again{% endif %}</td>
-            <td class="text-right">
+            <td class="whitespace-nowrap text-right">
               <form method="post">
                 {% csrf_token %}
                 <input type="hidden" name="pair_id" value="{{ pair.pk }}">
@@ -107,7 +107,7 @@
           <tr>
             <td class="sm:pl-5">{% include "finance/_transfer_pair.html" %}</td>
             <td class="whitespace-nowrap max-md:hidden">{{ pair.undone_at|date:"M j, Y" }}</td>
-            <td class="text-right">
+            <td class="whitespace-nowrap text-right">
               <form method="post">
                 {% csrf_token %}
                 <input type="hidden" name="pair_id" value="{{ pair.pk }}">
