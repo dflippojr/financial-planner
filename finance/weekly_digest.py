@@ -15,7 +15,7 @@ from django.utils import timezone
 
 from .cash_flow import format_minor
 from .ledger_counting import exclusion_exists_for
-from .models import AlertSettings, RecurringSeries, RecurringSeriesMember, Transaction, _person_for
+from .models import AlertSettings, RecurringSeries, RecurringSeriesMember, Transaction, person_for
 from .recurring_review import DEFAULT_PRICE_CHANGE_PERCENT, acknowledged_amounts, price_changes
 from .recurring_services import CADENCE_DAYS, MIN_DETECTED_CHARGES
 
@@ -200,7 +200,7 @@ def _large_transactions(principal, start, end, threshold):
 
 
 def _member_settings(principal):
-    person = _person_for(principal)
+    person = person_for(principal)
     values = None
     if person is not None:
         values = (

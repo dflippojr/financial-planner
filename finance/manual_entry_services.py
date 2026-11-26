@@ -18,7 +18,8 @@ from .calculated_balances import refresh_calculated_balances
 from .category_services import assignable_categories
 from .csv_import.fingerprint import manual_entry_fingerprint
 from .csv_import.services import archive_batch, categorize_imported_batch
-from .lifecycle_services import _DENIED, _person_for, _visible_account_for_update, lock_actor_household
+from .lifecycle_services import _visible_account_for_update, lock_actor_household
+from .access import DENIED, require_person
 from .models import Account, AuditEvent, ImportBatch, Tag, Transaction, TransactionCorrectionHistory
 
 
@@ -46,7 +47,7 @@ def _assignable_category(person, category_id):
         return None
     category = assignable_categories(person).filter(pk=category_id).first()
     if category is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return category
 
 
@@ -56,7 +57,7 @@ def _active_tags(person, tag_ids):
         return []
     tags = list(Tag.objects.visible_to(person).active().filter(pk__in=requested))
     if {tag.pk for tag in tags} != requested:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return tags
 
 
@@ -65,7 +66,7 @@ def _create_manual_entry(person, account_id, *, transaction_date, amount_minor, 
     lock_actor_household(person)
     account = _visible_account_for_update(person, account_id)
     if not manual_entry_accounts(person).filter(pk=account.pk).exists():
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     cleaned_description = (description or "").strip()
     if not cleaned_description:
         raise ValidationError(DESCRIPTION_REQUIRED)
@@ -123,7 +124,7 @@ def add_manual_transaction(
     Raises PermissionDenied for an account, category or tag the member cannot
     use, with the same message as a missing record.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     entry = _create_manual_entry(
         person,
         account_id,
@@ -146,7 +147,7 @@ def delete_manual_transaction(principal, transaction_id):
 
     Imported transactions are refused with the same response as a missing one.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     entry = (
         Transaction.objects.visible_to(person)
         .filter(
@@ -158,7 +159,7 @@ def delete_manual_transaction(principal, transaction_id):
         .first()
     )
     if entry is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     archive_batch(person, entry.account_id, entry.import_batch_id, manual=True)
     history = TransactionCorrectionHistory.objects.create(
         transaction_id=entry.pk,

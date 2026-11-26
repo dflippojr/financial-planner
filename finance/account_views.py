@@ -11,7 +11,7 @@ from django.views.decorators.http import require_http_methods
 
 from . import account_sort
 from .access import request_person as _person
-from .access import service_or_404 as _service_or_404
+from .access import service_or_404
 from .cash_flow import format_minor
 from .households import current_household
 from .forms import (
@@ -179,7 +179,7 @@ def account_rename(request, account_id):
     if form.is_valid():
         # The service rechecks visibility under the household and account
         # locks, so an account unshared mid-request cannot be renamed.
-        _service_or_404(lambda: rename_account(request.user, account_id, form.cleaned_data["name"]))
+        service_or_404(lambda: rename_account(request.user, account_id, form.cleaned_data["name"]))
     return redirect("account-list")
 
 
@@ -192,7 +192,7 @@ def account_share(request, account_id):
     if not form.is_valid():
         return redirect("account-list")
     share_mode = form.cleaned_data["share_mode"]
-    _service_or_404(lambda: share_account(request.user, account_id, share_mode))
+    service_or_404(lambda: share_account(request.user, account_id, share_mode))
     return redirect("account-list")
 
 
@@ -206,7 +206,7 @@ def account_change_share_mode(request, account_id):
         return redirect("account-list")
     share_mode = form.cleaned_data["share_mode"]
     confirm = form.cleaned_data["confirm_give_up_ownership"]
-    _service_or_404(
+    service_or_404(
         lambda: change_account_share_mode(
             request.user,
             account_id,
@@ -222,7 +222,7 @@ def account_change_share_mode(request, account_id):
 @requires_recent_auth("unshare-account", form_url_name="account-list")
 def account_unshare(request, account_id):
     _active_visible_account(request.user, account_id)
-    _service_or_404(lambda: unshare_account(request.user, account_id))
+    service_or_404(lambda: unshare_account(request.user, account_id))
     return redirect("account-list")
 
 
@@ -230,7 +230,7 @@ def account_unshare(request, account_id):
 @never_cache
 def account_archive(request, account_id):
     _active_visible_account(request.user, account_id)
-    _service_or_404(lambda: archive_account(request.user, account_id))
+    service_or_404(lambda: archive_account(request.user, account_id))
     return redirect("account-list")
 
 
@@ -261,7 +261,7 @@ def account_delete(request, account_id):
     account = _owned_visible_account(request.user, account_id)
     form = AccountDeleteForm(request.POST or None, account_name=account.name)
     if request.method == "POST" and form.is_valid():
-        account_name = _service_or_404(lambda: delete_account(request.user, account.pk))
+        account_name = service_or_404(lambda: delete_account(request.user, account.pk))
         messages.success(request, f"Deleted {account_name}.")
         return redirect("account-list")
     return _render_account_delete(request, account, form)

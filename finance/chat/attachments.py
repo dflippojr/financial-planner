@@ -17,12 +17,12 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.urls import reverse
 
-from ..access import DENIED as _DENIED
+from ..access import DENIED
 from ..ai.jobs import _connection_marker
 from ..ai.types import ToolResult, ToolSpec
 from ..audit_services import append_event, personal_audience, record
 from .attachment_parsing import KIND_LABELS, AttachmentRejected, ParsedAttachment
-from ..models import AiChatAttachment, AiConversation, AuditEvent, Person, _person_for
+from ..models import AiChatAttachment, AiConversation, AuditEvent, Person, person_for
 
 TOO_MANY = "A conversation can have at most {limit} attachments. Start a new conversation to attach more."
 NOT_AVAILABLE = "That attachment is not available in this conversation."
@@ -91,7 +91,7 @@ def remove_attachment(principal, attachment_id) -> int:
     person = _require_person(principal)
     row = visible_attachments(person).filter(pk=attachment_id).values("pk", "conversation_id").first()
     if row is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     target_id, conversation_id = row["pk"], row["conversation_id"]
     AiChatAttachment.objects.filter(pk=target_id).delete()
     record(person, AuditEvent.Action.CHAT_ATTACHMENT_REMOVED, AuditEvent.TargetType.CHAT_ATTACHMENT, target_id,
@@ -436,8 +436,8 @@ def _read_long_page(row, pages, offset, char_offset, header):
 
 
 def _require_person(principal) -> Person:
-    person = principal if isinstance(principal, Person) else _person_for(principal)
+    person = principal if isinstance(principal, Person) else person_for(principal)
     if person is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return person
 

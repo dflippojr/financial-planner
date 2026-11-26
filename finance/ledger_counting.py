@@ -19,7 +19,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce
 
-from .access import require_person as _person_for
+from .access import require_person
 from .access import visible_rows
 from .models import Account, RefundLink, RefundLinkDrop, Transaction, TransactionSplit, TransferPair
 
@@ -84,7 +84,7 @@ def _totals_base(principal, *, date_from=None, date_to=None, accounts=None, tag=
     Optional `q` keeps the rows the transaction list's search matches, and
     narrows the visible set like `tag`; it never widens it.
     """
-    person = _person_for(principal)
+    person = require_person(principal)
     visible_accounts = visible_rows(Account, person)
     is_transfer_leg = exclusion_exists_for(person)
     links = RefundLink.objects.filter(refund_id=OuterRef("pk"))

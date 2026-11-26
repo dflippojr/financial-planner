@@ -4,7 +4,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .access import require_person as _person
 from .cash_flow import cash_flow_report, selected_accounts
 from .households import current_household
@@ -432,13 +432,13 @@ def save_planned_item(principal, payload, *, item=None):
         item = PlannedItem(owner=person)
         before = None
     elif item.owner_id != person.pk and item.scope != PlannedItem.Scope.HOUSEHOLD:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     elif item.scope == PlannedItem.Scope.HOUSEHOLD and (
         household is None or item.household_id != household.pk
     ):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if item.pk is not None and item.owner_id != person.pk and scope != PlannedItem.Scope.HOUSEHOLD:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     if item.pk is not None:
         before = snapshot(item, PLANNED_AUDIT_FIELDS)
     was_household = item.pk is not None and item.scope == PlannedItem.Scope.HOUSEHOLD

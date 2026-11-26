@@ -15,7 +15,7 @@ from .cash_flow import (
     spending_category_detail_url,
 )
 from .ledger_counting import excluded_transfer_ids as _excluded_transfer_ids
-from .models import _person_for
+from .models import person_for
 from .models import Account, Alert, Transaction
 from .months import add_months, month_end, month_start
 from .recurring_services import merchant_key
@@ -58,7 +58,7 @@ def _category_thresholds(prefs):
 
 def unusual_settings_signature(principal):
     """The settings a month's flags depend on; a stored review is rebuilt when they change."""
-    prefs = settings_for(_person_for(principal))
+    prefs = settings_for(person_for(principal))
     percent, floor = _category_thresholds(prefs)
     return [percent, floor, prefs.large_transaction_minor]
 
@@ -268,7 +268,7 @@ def compute_unusual_flags(
     accounts=None,
 ):
     """Flags for one month using the viewer's visible cash-flow accounts (and optional filters)."""
-    person = _person_for(principal)
+    person = person_for(principal)
     start = month_start(month)
     end = month_end(start)
     prefs = settings_for(person)

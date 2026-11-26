@@ -11,8 +11,8 @@ again exactly as before.
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .ledger_counting import with_transfer_state
 from .ledger_edits import lock_accounts_and_transactions, record_text_history
 from .refund_links import drop_refund_links_to_originals
@@ -81,7 +81,7 @@ def _locked_row(person, transaction_id):
         .first()
     )
     if txn is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     # Visible means editable here: every member who sees a row may edit it. The
     # lock helper rechecks visibility once the household and rows are locked.
     locked = lock_accounts_and_transactions(person, [txn])[0]
@@ -90,7 +90,7 @@ def _locked_row(person, transaction_id):
 
 @transaction.atomic
 def mark_untracked_transfer(principal, transaction_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     txn = _locked_row(person, transaction_id)
     refusal = mark_refusal(txn)
     if refusal:
@@ -102,7 +102,7 @@ def mark_untracked_transfer(principal, transaction_id):
 
 @transaction.atomic
 def unmark_untracked_transfer(principal, transaction_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     txn = _locked_row(person, transaction_id)
     if not txn.untracked_transfer:
         raise ValidationError(NOT_MARKED)

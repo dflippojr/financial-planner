@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from .access import DENIED as _DENIED
+from .access import DENIED
 from .access import require_person as _person
 from .audit_services import record
 from .cash_flow import format_minor, selected_accounts
@@ -286,7 +286,7 @@ def set_savings_buffer(principal, buffer_minor):
     with transaction.atomic():
         household = current_household(person)
         if household is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
         lock_actor_household(person)
         household.refresh_from_db(fields=["savings_buffer_minor"])
         if household.savings_buffer_minor == buffer_minor:

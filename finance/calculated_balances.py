@@ -35,12 +35,12 @@ from django.db import transaction
 from django.db.models import Exists, Min, OuterRef
 
 from .audit_services import record
-from .lifecycle_services import _person_for
+from .access import require_person
 from .models import Account, AuditEvent, BalanceSnapshot, Transaction
 from .months import add_months, month_end
 from .net_worth import signed_balance_minor, source_rank_expression
 from .reconciliation import RECONCILED_TYPES, _coverage, _covered, _daily_totals
-from .snapshot_services import _lock_editable_account, _record_snapshot
+from .snapshot_services import lock_editable_account, _record_snapshot
 
 # The balance of these accounts is the sum of their transactions. Investment
 # values move with the market; loans and physical assets hold no transactions.
@@ -216,10 +216,10 @@ def save_calculated_balances(principal, account_id):
     before the earliest of them. refresh_calculated_balances keeps that true
     after later imports, edits and deletions.
     """
-    account = _lock_editable_account(principal, account_id)
+    account = lock_editable_account(principal, account_id)
     calculation = calculate(account)
     wanted = {row.month_end: row.balance_minor for row in calculation.rows}
-    created, updated, deleted = _replace_calculated_rows(_person_for(principal), account, wanted)
+    created, updated, deleted = _replace_calculated_rows(require_person(principal), account, wanted)
     return SaveResult(saved=len(calculation.rows), created=created, updated=updated, deleted=deleted)
 
 
@@ -276,8 +276,8 @@ def refresh_locked_calculated_balances(person, account):
 @transaction.atomic
 def delete_calculated_balances(principal, account_id):
     """Delete every calculated row on the account; returns how many were deleted."""
-    account = _lock_editable_account(principal, account_id)
-    person = _person_for(principal)
+    account = lock_editable_account(principal, account_id)
+    person = require_person(principal)
     rows = _locked_calculated_rows(account)
     for row in rows:
         target_id = row.pk

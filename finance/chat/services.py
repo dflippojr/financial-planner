@@ -45,7 +45,7 @@ from .attachment_parsing import AttachmentRejected
 from .charts import MAX_CHARTS_PER_REPLY, chart_tools
 from .cleanup_cards import cleanup_lookup_tools
 from .proposals import proposal_tools
-from ..lifecycle_services import _DENIED, _person_for
+from ..access import DENIED, require_person
 from ..input_limits import MAX_CHAT_PROMPT_CHARS, MAX_PAGE_CONTEXT_CHARS, MAX_CHAT_MESSAGES
 from ..models import (
     Account,
@@ -119,33 +119,33 @@ def purge_expired(person=None):
 
 
 def start_conversation(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     connection, backend = resolve_ai(person, use_chat=True)
     return _new_conversation(person, backend)
 
 
 def conversations_for(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     purge_expired(person)
     return AiConversation.objects.visible_to(person).order_by("-updated_at", "-pk")  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
 
 
 def conversation_for(principal, conversation_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     purge_expired(person)
     return AiConversation.objects.visible_to(person).filter(pk=conversation_id).first()  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
 
 
 def delete_conversation(principal, conversation_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     row = AiConversation.objects.owned_by(person).filter(pk=conversation_id).first()  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
     if row is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     delete_conversations(AiConversation.objects.filter(pk=row.pk), actor=person)
 
 
 def delete_all_conversations(principal):
-    person = _person_for(principal)
+    person = require_person(principal)
     delete_conversations(AiConversation.objects.owned_by(person), actor=person)  # pyright: ignore[reportAttributeAccessIssue] - custom queryset method on the untyped as_manager() manager
 
 
@@ -323,7 +323,7 @@ def send_message(
     """
     if len(text or "") > MAX_CHAT_PROMPT_CHARS:
         raise AiError(f"Questions must be at most {MAX_CHAT_PROMPT_CHARS:,} characters.")
-    person = _person_for(principal)
+    person = require_person(principal)
     purge_expired(person)
     connection, backend = chat_backend_for(person)
     provider = provider_key(connection, backend)
@@ -338,7 +338,7 @@ def send_message(
     if conversation_id:
         conversation = conversation_for(person, conversation_id)
         if conversation is None:
-            raise PermissionDenied(_DENIED)
+            raise PermissionDenied(DENIED)
     elif not start_new:
         # Plain Chat forms keep their latest-thread fallback; a fresh popover has shown no history.
         conversation = conversations_for(person).first()
@@ -350,7 +350,7 @@ def send_message(
             conversation = _lock_conversation(conversation.pk)
         except AiConversation.DoesNotExist:
             # Deleted while this send waited for its lock.
-            raise PermissionDenied(_DENIED) from None
+            raise PermissionDenied(DENIED) from None
         pending = AiConversationMessage.objects.filter(
             conversation__member=person, status=AiConversationMessage.Status.PENDING
         ).count()

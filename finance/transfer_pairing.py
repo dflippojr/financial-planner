@@ -15,8 +15,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Q
 
-from .access import DENIED as _DENIED
-from .access import require_person as _person_for
+from .access import DENIED
+from .access import require_person
 from .access import visible_rows
 from .audit_services import record
 from .households import current_household
@@ -88,10 +88,10 @@ DIRECTION_WRONG = "card pair runs the wrong way (bank credit with card debit), s
 
 @transaction.atomic
 def set_transfer_window_days(principal, days):
-    person = _person_for(principal)
+    person = require_person(principal)
     household = current_household(person)
     if household is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     if days < 0 or days > 366:
         raise ValidationError("Choose a match window between 0 and 366 days.")
@@ -571,7 +571,7 @@ def revalidate_pairs_for_leg_ids(person, seed_leg_ids):
 
 @transaction.atomic
 def revalidate_pairs_touching_account(principal, account_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     seed = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
     revalidate_pairs_for_leg_ids(person, seed)
@@ -579,7 +579,7 @@ def revalidate_pairs_touching_account(principal, account_id):
 
 @transaction.atomic
 def revalidate_pairs_touching_import_batch(principal, batch_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     lock_actor_household(person)
     seed = list(Transaction.objects.filter(import_batch_id=batch_id).values_list("pk", flat=True))
     revalidate_pairs_for_leg_ids(person, seed)
@@ -657,7 +657,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
         transaction_ids = list(transaction_ids)
         if not transaction_ids:
             return []
-    person = _person_for(principal)
+    person = require_person(principal)
     actor = person if actor is None else actor
     lock_actor_household(person)
     locked = (
@@ -722,7 +722,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
 
 
 def _visible_pair(principal, pair_id):
-    person = _person_for(principal)
+    person = require_person(principal)
     pair = (
         visible_rows(TransferPair, person)
         .select_related("leg_a", "leg_b", "leg_a__account", "leg_b__account", "leg_a__category", "leg_b__category")
@@ -730,7 +730,7 @@ def _visible_pair(principal, pair_id):
         .first()
     )
     if pair is None:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     return person, pair
 
 
@@ -752,11 +752,11 @@ def _record_pair_event(person, leg, action, pair):
 def confirm_transfer_pair(principal, pair_id):
     person, pair = _visible_pair(principal, pair_id)
     if pair.status != TransferPair.Status.SUGGESTED:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     locked = lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
     left, right = locked[0], locked[1]
     if not _is_candidate(left, right):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
     _record_pair_event(person, left, AuditEvent.Action.RECORD_ENABLED, pair)
@@ -767,7 +767,7 @@ def confirm_transfer_pair(principal, pair_id):
 def dismiss_transfer_pair(principal, pair_id):
     person, pair = _visible_pair(principal, pair_id)
     if pair.status != TransferPair.Status.SUGGESTED:
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     lock_actor_household(person)
     pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
     pair.status = TransferPair.Status.DISMISSED
@@ -780,7 +780,7 @@ def dismiss_transfer_pair(principal, pair_id):
 def undo_transfer_pair(principal, pair_id):
     person, pair = _visible_pair(principal, pair_id)
     if pair.status not in (TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED):
-        raise PermissionDenied(_DENIED)
+        raise PermissionDenied(DENIED)
     locked = lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
     by_id = {item.pk: item for item in locked}
     left = by_id[pair.leg_a_id]

@@ -30,12 +30,12 @@ def member_operation(function):
     def wrapped(*args, **kwargs):
         if execution.get() is not None:
             return function(*args, **kwargs)
-        from .models import _person_for
+        from .models import person_for
 
         principal = args[0] if args else kwargs.get("principal", kwargs.get("prefs"))
         principal = getattr(principal, "person", principal)
         with operation(actor_kind=AuditEvent.ActorKind.MEMBER, source=AuditEvent.Source.UI,
-                       initiator=_person_for(principal)):
+                       initiator=person_for(principal)):
             return function(*args, **kwargs)
     return wrapped
 

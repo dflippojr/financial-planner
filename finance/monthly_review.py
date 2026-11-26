@@ -83,9 +83,9 @@ def _scoped_ids(queryset):
 
 def visibility_key(principal):
     """Stored reviews are reused only while everything they summarize is still visible."""
-    from .models import _person_for
+    from .models import person_for
 
-    person = _person_for(principal)
+    person = person_for(principal)
     accounts = Account.objects.visible_to(principal).order_by("pk").values_list("pk", flat=True)
     households = Membership.objects.filter(person=person, ended_at__isnull=True).order_by(
         "household_id"
@@ -392,9 +392,9 @@ def _net_worth_facts(principal, start, end):
 
 
 def _large_transaction_facts(principal, start, end):
-    from .models import _person_for
+    from .models import person_for
 
-    person = _person_for(principal)
+    person = person_for(principal)
     prefs = settings_for(person)
     threshold = prefs.large_transaction_minor
     excluded = _excluded_transfer_ids(principal)
@@ -466,9 +466,9 @@ def _raise_review_alert(person, month):
 
 @transaction.atomic
 def store_monthly_review(principal, month, *, force=False, today=None, raise_inbox=True):
-    from .models import _person_for
+    from .models import person_for
 
-    person = _person_for(principal)
+    person = person_for(principal)
     month = month_start(month)
     today = today or timezone.localdate()
     key = visibility_key(person)

@@ -6,8 +6,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from .access import first_message as _first_message
-from .access import service_or_404 as _service_or_404
+from .access import first_message
+from .access import service_or_404
 from .auto_notes import preview_token
 from .auto_note_views import note_undo_for, remember_note_undo
 from .category_services import ensure_household_categories
@@ -96,9 +96,9 @@ def category_rule_list(request):
     form = CategoryRuleForm(request.POST if request.method == "POST" else None, principal=request.user, initial=initial)
     if request.method == "POST" and form.is_valid():
         try:
-            rule = _service_or_404(lambda: _save_from_form(request, form))
+            rule = service_or_404(lambda: _save_from_form(request, form))
         except ValidationError as exc:
-            form.add_error(None, _first_message(exc, "The rule could not be saved."))
+            form.add_error(None, first_message(exc, "The rule could not be saved."))
         else:
             return redirect("category-rule-detail", rule_id=rule.pk)
     return render(
@@ -117,12 +117,12 @@ def category_rule_list(request):
 @never_cache
 def category_rule_application_reverse(request, application_id):
     """Undo an application whose rule this person can no longer open."""
-    _service_or_404(lambda: reverse_application(request.user, application_id))
+    service_or_404(lambda: reverse_application(request.user, application_id))
     return redirect("category-rule-list")
 
 
 def _toggle_rule(request, rule, enabled):
-    _service_or_404(lambda: set_rule_enabled(request.user, rule.pk, enabled))
+    service_or_404(lambda: set_rule_enabled(request.user, rule.pk, enabled))
     return redirect("category-rule-detail", rule_id=rule.pk)
 
 
@@ -130,9 +130,9 @@ def _post_save_rule(request, rule, form):
     if not form.is_valid():
         return None
     try:
-        saved = _service_or_404(lambda: _save_from_form(request, form, rule_id=rule.pk))
+        saved = service_or_404(lambda: _save_from_form(request, form, rule_id=rule.pk))
     except ValidationError as exc:
-        form.add_error(None, _first_message(exc, "The rule could not be saved."))
+        form.add_error(None, first_message(exc, "The rule could not be saved."))
         return None
     return redirect("category-rule-detail", rule_id=saved.pk)
 
@@ -140,9 +140,9 @@ def _post_save_rule(request, rule, form):
 def _post_apply_rule(request, rule, errors):
     try:
         version = request.POST.get("rule_version") or None
-        _service_or_404(lambda: apply_rule(request.user, rule.pk, previewed_version=version))
+        service_or_404(lambda: apply_rule(request.user, rule.pk, previewed_version=version))
     except ValidationError as exc:
-        errors["apply"] = _first_message(exc, "The rule could not be applied.")
+        errors["apply"] = first_message(exc, "The rule could not be applied.")
         return None
     return redirect("category-rule-detail", rule_id=rule.pk)
 
@@ -150,12 +150,12 @@ def _post_apply_rule(request, rule, errors):
 def _post_apply_rule_note(request, rule, errors):
     """Add the rule's note to the existing matches the page previewed (#684)."""
     try:
-        changed, undo = _service_or_404(lambda: apply_rule_note_to_existing(
+        changed, undo = service_or_404(lambda: apply_rule_note_to_existing(
             request.user, rule.pk, previewed_version=request.POST.get("rule_version") or "",
             expected_token=request.POST.get("preview_token") or "",
         ))
     except ValidationError as exc:
-        errors["note"] = _first_message(exc, "The note could not be added.")
+        errors["note"] = first_message(exc, "The note could not be added.")
         return None
     remember_note_undo(request, f"rule:{rule.pk}", undo, len(changed))
     return redirect("category-rule-detail", rule_id=rule.pk)
@@ -166,7 +166,7 @@ def _post_reverse_rule(request):
         application_id = int(request.POST.get("application_id", "0"))
     except (TypeError, ValueError) as exc:
         raise Http404 from exc
-    _service_or_404(lambda: reverse_application(request.user, application_id))
+    service_or_404(lambda: reverse_application(request.user, application_id))
     return redirect("category-rule-detail", rule_id=int(request.resolver_match.kwargs["rule_id"]))
 
 
@@ -202,9 +202,9 @@ def category_rule_detail(request, rule_id):
     posted = _posted_rule_detail(request, rule, form, action, errors)
     if posted is not None:
         return posted
-    rule, matches = _service_or_404(lambda: preview_rule(request.user, rule.pk))
+    rule, matches = service_or_404(lambda: preview_rule(request.user, rule.pk))
     rule.inactive = personal_rule_is_inactive(rule)
-    note_rows = _service_or_404(lambda: rule_note_matches(request.user, rule))
+    note_rows = service_or_404(lambda: rule_note_matches(request.user, rule))
     note_token = preview_token(note_rows)
     return render(
         request,

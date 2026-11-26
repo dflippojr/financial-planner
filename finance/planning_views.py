@@ -7,7 +7,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from .access import request_person as _person
-from .access import service_or_404 as _service_or_404
+from .access import service_or_404
 from .access import visible_rows
 from .households import current_household
 from .forms import PlannedItemForm
@@ -78,7 +78,7 @@ def planned_item_list(request):
     extra = _prefill_from_query(request.GET) if request.method == "GET" else None
     form = _form(request, person, request.POST if request.method == "POST" else None, extra_initial=extra)
     if request.method == "POST" and form.is_valid():
-        _service_or_404(lambda: save_planned_item(request.user, form.save_payload()), also=(ValidationError,))
+        service_or_404(lambda: save_planned_item(request.user, form.save_payload()), also=(ValidationError,))
         return redirect("planned-items")
     items = list(PlannedItem.objects.visible_to(request.user).order_by("start_date", "name", "pk"))
     _attach_funding_cards(request.user, items)
@@ -103,7 +103,7 @@ def planned_item_edit(request, item_id):
         extra_initial=extra,
     )
     if request.method == "POST" and form.is_valid():
-        _service_or_404(lambda: save_planned_item(request.user, form.save_payload(), item=item), also=(ValidationError,))
+        service_or_404(lambda: save_planned_item(request.user, form.save_payload(), item=item), also=(ValidationError,))
         return redirect("planned-items")
     return render(
         request,
@@ -116,7 +116,7 @@ def planned_item_edit(request, item_id):
 @never_cache
 def planned_item_disable(request, item_id):
     item = _visible_item(request.user, item_id)
-    _service_or_404(lambda: set_planned_item_enabled(request.user, item, False), also=(ValidationError,))
+    service_or_404(lambda: set_planned_item_enabled(request.user, item, False), also=(ValidationError,))
     return redirect("planned-items")
 
 
@@ -124,5 +124,5 @@ def planned_item_disable(request, item_id):
 @never_cache
 def planned_item_enable(request, item_id):
     item = _visible_item(request.user, item_id)
-    _service_or_404(lambda: set_planned_item_enabled(request.user, item, True), also=(ValidationError,))
+    service_or_404(lambda: set_planned_item_enabled(request.user, item, True), also=(ValidationError,))
     return redirect("planned-items")

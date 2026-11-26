@@ -3,7 +3,7 @@ from django.db import models
 from django.db.models import Q
 
 from .base import sha256_validator
-from .people import Person, person_for as _person_for
+from .people import Person, person_for
 from .accounts import Account
 
 
@@ -77,7 +77,7 @@ class SheetComparisonSettings(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(member=person)
@@ -108,7 +108,7 @@ class SheetMonthTotal(models.Model):
 
     class QuerySet(models.QuerySet):
         def visible_to(self, principal):
-            person = _person_for(principal)
+            person = person_for(principal)
             if person is None:
                 return self.none()
             return self.filter(member=person)

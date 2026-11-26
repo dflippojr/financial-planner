@@ -7,8 +7,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from .access import first_message as _first_message
-from .access import service_or_404 as _service_or_404
+from .access import first_message
+from .access import service_or_404
 from .auto_notes import preview_token
 from .bulk_edit_views import active_bulk_undo
 from .forms import AutoNoteForm
@@ -40,7 +40,7 @@ def note_undo_for(request, target):
 @require_http_methods(["GET", "POST"])
 @never_cache
 def recurring_note(request, series_id):
-    series, rows = _service_or_404(lambda: recurring_note_preview(request.user, series_id))
+    series, rows = service_or_404(lambda: recurring_note_preview(request.user, series_id))
     form = AutoNoteForm(initial={"note": series.note})
     error = None
     if request.method == "POST":
@@ -49,21 +49,21 @@ def recurring_note(request, series_id):
             form = AutoNoteForm(request.POST)
             if form.is_valid():
                 try:
-                    _service_or_404(lambda: set_recurring_series_note(request.user, series_id, form.cleaned_data["note"]))
+                    service_or_404(lambda: set_recurring_series_note(request.user, series_id, form.cleaned_data["note"]))
                 except ValidationError as exc:
-                    form.add_error("note", _first_message(exc, "The note could not be saved."))
+                    form.add_error("note", first_message(exc, "The note could not be saved."))
                 else:
                     messages.success(request, "Note saved. New charges in this series will get it.")
                     return redirect("recurring-note", series_id=series_id)
         elif action == "apply":
             try:
-                changed, undo = _service_or_404(lambda: apply_recurring_note_to_existing(
+                changed, undo = service_or_404(lambda: apply_recurring_note_to_existing(
                     request.user, series_id, previewed_version=request.POST.get("note_version") or "",
                     expected_token=request.POST.get("preview_token") or "",
                 ))
             except ValidationError as exc:
-                error = _first_message(exc, "The note could not be added.")
-                series, rows = _service_or_404(lambda: recurring_note_preview(request.user, series_id))
+                error = first_message(exc, "The note could not be added.")
+                series, rows = service_or_404(lambda: recurring_note_preview(request.user, series_id))
             else:
                 remember_note_undo(request, f"recurring:{series_id}", undo, len(changed))
                 return redirect("recurring-note", series_id=series_id)
