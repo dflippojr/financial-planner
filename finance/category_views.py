@@ -232,8 +232,10 @@ def _kept_undone_ids(request):
     member undid it, so a forged id shows nothing. Garbage is ignored.
     """
     kept = []
-    for part in request.GET.get("undone", "").split(","):
-        if part.strip().isdigit() and int(part) not in kept:
+    for part in request.GET.get("undone", "").split(",")[:RECENTLY_UNDONE_LIMIT * 2]:
+        part = part.strip()
+        # ASCII digits only ("²" is a digit to str.isdigit), within a bigint.
+        if part.isascii() and part.isdigit() and len(part) <= 18 and int(part) not in kept:
             kept.append(int(part))
     return kept[-RECENTLY_UNDONE_LIMIT:]
 

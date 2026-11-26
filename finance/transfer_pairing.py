@@ -841,10 +841,11 @@ def restore_transfer_pair(principal, pair_id):
     if not _is_candidate(left, right) or _leg_excluded_elsewhere(pair, left, right):
         raise PermissionDenied(DENIED)
     # A suggestion found for a leg while the pair was undone would let a later
-    # Confirm exclude that leg twice. Retire it, as refresh never suggests a pair
-    # on a leg that is already excluded.
-    for competing in _pairs_on_legs(pair, (TransferPair.Status.SUGGESTED,)).select_for_update(of=("self",)).order_by("pk"):
-        _invalidate_suggestion(competing)
+    # Confirm exclude that leg twice, and refresh never suggests a pair on an
+    # excluded leg. Delete it rather than retire it: a suggestion holds no refund
+    # drops or history, and refresh can suggest it again if this pair is undone.
+    competing = _pairs_on_legs(pair, (TransferPair.Status.SUGGESTED,)).select_for_update(of=("self",)).order_by("pk")
+    TransferPair.objects.filter(pk__in=[item.pk for item in competing]).delete()
     _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
     pair.undone_at = None
     pair.undone_by = None

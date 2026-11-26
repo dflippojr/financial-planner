@@ -321,9 +321,7 @@ def test_restore_retires_a_competing_suggestion_so_no_leg_is_excluded_twice():
     client.post(reverse("transfer-review"), {"action": "restore", "pair_id": pair.pk})
 
     assert TransferPair.objects.get(pk=pair.pk).status == TransferPair.Status.CONFIRMED
-    competing.refresh_from_db()
-    assert competing.status not in (TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED,
-                                    TransferPair.Status.CONFIRMED)
+    assert not TransferPair.objects.filter(pk=competing.pk).exists()
     response = client.post(reverse("transfer-review"), {"action": "confirm", "pair_id": competing.pk})
     assert response.status_code == 404
     assert TransferPair.objects.excluding_income_and_spending().filter(  # pyright: ignore[reportAttributeAccessIssue] - QuerySet.as_manager() is untyped, as in the baseline
@@ -353,3 +351,33 @@ def test_suggestions_order_by_creation_not_by_last_update():
     response = _client(owner).get(reverse("transfer-review"))
     suggestions = [pk for pk, action in _forms(response.content.decode()) if action == "confirm"]
     assert suggestions == [pair.pk for pair in reversed(pairs)]
+
+
+def test_a_suggestion_restore_removed_comes_back_when_the_pair_is_undone_again():
+    owner, _member, _household, _checking, card, _private, pairs = _world(pair_count=1)
+    pair = pairs[0]
+    client = _client(owner)
+    checking_leg = Transaction.objects.get(pk=pair.leg_a_id)
+    client.post(reverse("transfer-review"), {"action": "undo", "pair_id": pair.pk})
+    second = make_transaction(
+        owner, card, amount_minor=-checking_leg.amount_minor, transaction_date=checking_leg.transaction_date,
+        description="SYN REFUND", fingerprint="d" * 64,
+    )
+    refresh_transfer_pairs(owner)
+    client.post(reverse("transfer-review"), {"action": "restore", "pair_id": pair.pk})
+    assert not TransferPair.objects.filter(leg_b=second).exists()
+
+    client.post(reverse("transfer-review"), {"action": "undo", "pair_id": pair.pk})
+
+    assert TransferPair.objects.get(leg_a=checking_leg, leg_b=second).status == TransferPair.Status.SUGGESTED
+
+
+def test_garbage_in_the_undone_parameter_is_ignored():
+    owner, *_rest, pairs = _world()
+    undo_transfer_pair(owner, pairs[0].pk)
+    query = f"abc,\u00b2,-1,99999999999999999999999,{pairs[0].pk},,"
+    response = _client(owner).get(reverse("transfer-review"), {"undone": query})
+    assert response.status_code == 200
+    excluded = _forms(_excluded_section(response.content.decode()))
+    assert (pairs[0].pk, "restore") in excluded
+    assert len(excluded) == 3
