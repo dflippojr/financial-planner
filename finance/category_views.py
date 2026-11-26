@@ -226,8 +226,16 @@ _TRANSFER_ACTIONS = {
 }
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_MICROSECOND = timedelta(microseconds=1)
+
+
+def _microseconds(moment):
+    return (moment - _EPOCH) // _MICROSECOND
+
+
 def _visit_since(request):
-    """When this visit to the Transfers page took its first action, from `?since=<epoch seconds>` (#635).
+    """When this visit to the Transfers page took its first action, from `?since=<epoch microseconds>` (#635).
 
     Every pair undone at or after it keeps its row, so nothing moves under the
     cursor, however many pairs the member undoes. It only widens which of the
@@ -241,13 +249,14 @@ def _visit_since(request):
     now = timezone.now()
     earliest = now - timedelta(days=RECENTLY_UNDONE_DAYS)
     # Clamped as integers, so a huge value never reaches datetime and overflows.
-    seconds = min(max(int(raw), int(earliest.timestamp())), int(now.timestamp()))
-    return datetime.fromtimestamp(seconds, tz=UTC)
+    micros = min(max(int(raw), _microseconds(earliest)), _microseconds(now))
+    return _EPOCH + micros * _MICROSECOND
 
 
 def _transfer_review_url(since):
-    # Whole seconds, rounded down, so the first Undo of the visit is never later than the marker.
-    return f"{reverse('transfer-review')}?{urlencode({'since': int(since.timestamp())})}"
+    # Exact to the microsecond, as undone_at is stored: rounding down would pull
+    # in a pair undone earlier in the same second, before this visit (#820 review r3).
+    return f"{reverse('transfer-review')}?{urlencode({'since': _microseconds(since)})}"
 
 
 @require_http_methods(["GET", "POST"])

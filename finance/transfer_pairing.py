@@ -284,6 +284,25 @@ def _score_pairs(transactions):
     ]
 
 
+def _freed_transaction_ids(pairs):
+    """Legs of pairs a member undid: refresh may suggest a new pair on them but never auto-marks one (#635).
+
+    An auto-marked pair would be a new Excluded row above the one the member
+    just clicked, so the next click would land on another pair. Restore clears
+    `undone_at`, which frees the legs for auto-marking again.
+    """
+    freed = set()
+    for pair in pairs:
+        if pair.status == TransferPair.Status.UNDONE and pair.undone_at is not None:
+            freed.add(pair.leg_a_id)
+            freed.add(pair.leg_b_id)
+    return freed
+
+
+def _touches(pair, legs):
+    return pair.leg_a_id in legs or pair.leg_b_id in legs  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+
+
 def _occupied_transaction_ids(pairs):
     occupied = set()
     for pair in pairs:
@@ -365,13 +384,13 @@ def _lock_visible_transactions(person):
     )
 
 
-def _update_existing_pair(pair, scored, person):
+def _update_existing_pair(pair, scored, person, freed=()):
     if pair.status in _SETTLED_PAIR_STATUSES:
         return
     pair.confidence = scored["confidence"]
     pair.kind = scored["kind"]
     pair.reasons = scored["reasons"]
-    if scored["confidence"] == TransferPair.Confidence.HIGH:
+    if scored["confidence"] == TransferPair.Confidence.HIGH and not _touches(pair, freed):
         _snapshot_and_mark(pair, scored["left"], scored["right"], TransferPair.Status.AUTO_MARKED, person)
     else:
         pair.save(update_fields=("confidence", "kind", "reasons", "updated_at"))
@@ -682,6 +701,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
     locked_by_id = {item.pk: item for item in locked}
     _revalidate_marked_pairs(existing, locked_by_id, actor)
     occupied = _occupied_transaction_ids(existing.values())
+    freed = _freed_transaction_ids(existing.values())
     created = []
     visible_ids = set(visible_rows(Transaction, person).filter(
         pk__in=tx_ids, status=Transaction.Status.ACTIVE
@@ -704,7 +724,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
         left, right = scored["left"], scored["right"]
         key = (left.pk, right.pk)
         if key in existing:
-            _update_existing_pair(existing[key], scored, actor)
+            _update_existing_pair(existing[key], scored, actor, freed)
             continue
         if left.pk in occupied or right.pk in occupied:
             continue
@@ -720,7 +740,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
         existing[key] = pair
         occupied.add(left.pk)
         occupied.add(right.pk)
-        if scored["confidence"] == TransferPair.Confidence.HIGH:
+        if scored["confidence"] == TransferPair.Confidence.HIGH and not _touches(pair, freed):
             _snapshot_and_mark(pair, left, right, TransferPair.Status.AUTO_MARKED, actor)
         created.append(pair)
     return created

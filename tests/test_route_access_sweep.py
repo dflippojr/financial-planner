@@ -604,7 +604,7 @@ PROBE = {
 PROBE_VALUES = {
     # A visit marker a minute before the private side's undone pair was undone,
     # so the page would list that pair if it ignored visibility (#635).
-    "since": lambda side: str(int(side.undone_pair.undone_at.timestamp()) - 60),
+    "since": lambda side: str(int(side.undone_pair.undone_at.timestamp() - 60) * 1_000_000),
 }
 
 FILTERS = ("account", "tag", "scope")

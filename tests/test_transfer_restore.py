@@ -2,6 +2,7 @@
 
 import re
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import PermissionDenied
@@ -530,3 +531,78 @@ def test_a_pair_another_household_undoes_during_the_visit_never_shows():
     assert other.pk not in {pk for pk, _action in _forms(member_page)}
     assert "SYN OTHER" not in member_page
     assert (pairs[0].pk, "restore") in _forms(_excluded_section(member_page))
+
+
+def _click_spot_twice(client, pair_id):
+    """Undo `pair_id` from a fresh visit, then click the same spot again; the pair ids at that spot."""
+    url = reverse("transfer-review")
+    page = client.get(url)
+    forms = _above_recently_undone(page.content.decode())
+    spot = next(i for i, (pk, _action) in enumerate(forms) if pk == pair_id)
+    seen = []
+    for _click in range(2):
+        clicked, action = _forms(page.content.decode())[spot]
+        seen.append(clicked)
+        page = client.post(url, {"action": action, "pair_id": clicked}, follow=True)
+        if page.status_code == 404 and action == "restore":
+            # A refused Restore (AC4) leaves the page as it was.
+            page = client.get(url)
+        assert page.status_code == 200
+        url = page.redirect_chain[-1][0] if getattr(page, "redirect_chain", None) else url
+    return forms, _above_recently_undone(page.content.decode()), seen
+
+
+def _above_recently_undone(html):
+    return _forms(html[: html.index(UNDONE_START)])
+
+
+def test_undo_never_auto_marks_a_new_pair_on_a_freed_leg():
+    """Review r3 (E): a new pair on a freed leg would be a new Excluded row above the clicked one (#635 owner decision)."""
+    owner, _member, household, checking, card, _private, pairs = _world(pair_count=2)
+    _spread_timestamps(pairs)
+    debit = make_transaction(owner, checking, amount_minor=-55_500, transaction_date=date(2026, 5, 1), description="SYN CARD PAYMENT LATE")
+    make_transaction(owner, card, amount_minor=55_500, transaction_date=date(2026, 5, 5), description="SYN PAYMENT THANK YOU LATE")
+    refresh_transfer_pairs(owner)
+    old = TransferPair.objects.get(leg_a=debit)
+    TransferPair.objects.filter(pk=old.pk).update(status=TransferPair.Status.CONFIRMED)
+    # The match window narrows to two days; the confirmed pair, four days apart, still holds.
+    type(household).objects.filter(pk=household.pk).update(transfer_match_window_days=2)
+    make_transaction(
+        owner, card, amount_minor=55_500, transaction_date=date(2026, 5, 1), description="SYN PAYMENT THANK YOU SAME DAY",
+        fingerprint="f" * 64,
+    )
+    refresh_transfer_pairs(owner)
+    assert TransferPair.objects.get(pk=old.pk).status == TransferPair.Status.CONFIRMED
+    marked_before = set(TransferPair.objects.filter(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED)).values_list("pk", flat=True))
+
+    before, after, seen = _click_spot_twice(_client(owner), old.pk)
+
+    assert seen == [old.pk, old.pk]
+    assert [pk for pk, _action in after] == [pk for pk, _action in before]
+    # Restore refuses: four days apart no longer fits the two-day window.
+    assert TransferPair.objects.get(pk=old.pk).status == TransferPair.Status.UNDONE
+    marked_before.discard(old.pk)
+    assert set(TransferPair.objects.filter(status__in=(TransferPair.Status.AUTO_MARKED, TransferPair.Status.CONFIRMED)).values_list("pk", flat=True)) == marked_before
+    # The new match is offered as a suggestion instead, for the member to confirm.
+    assert TransferPair.objects.filter(leg_a=debit, status=TransferPair.Status.SUGGESTED).exists()
+
+
+def test_a_pair_undone_earlier_in_the_same_second_before_a_revisit_stays_out():
+    """Review r3 (F): the visit marker keeps microseconds, so an undo just before the visit is not pulled in (#635 owner decision)."""
+    owner, *_rest, pairs = _world(pair_count=3)
+    _spread_timestamps(pairs)
+    earlier, clicked = pairs[2], pairs[0]
+    undo_transfer_pair(owner, earlier.pk)
+    moment = (timezone.now() - timedelta(seconds=10)).replace(microsecond=200_000)
+    TransferPair.objects.filter(pk=earlier.pk).update(undone_at=moment)
+    client = _client(owner)
+    url = reverse("transfer-review")
+    revisit = _forms(_excluded_section(client.get(url).content.decode()))
+    assert earlier.pk not in {pk for pk, _action in revisit}
+
+    with patch("django.utils.timezone.now", return_value=moment + timedelta(milliseconds=600)):
+        page = client.post(url, {"action": "undo", "pair_id": clicked.pk}, follow=True)
+
+    after = _forms(_excluded_section(page.content.decode()))
+    assert [pk for pk, _action in after] == [pk for pk, _action in revisit]
+    assert (clicked.pk, "restore") in after
