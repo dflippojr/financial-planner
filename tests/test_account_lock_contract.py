@@ -48,6 +48,7 @@ GENERIC_LOCKS = {
     ("finance/passkey_services.py", "_passkey_for_assertion"): "Passkey rows",
     ("finance/refund_links.py", "reapply_refund_link_drops_for_account"): "TransferPair rows, of=self",
     ("finance/refund_links.py", "restore_refund_categories"): "Transaction rows, of=self",
+    ("finance/transfer_pairing.py", "restore_transfer_pair"): "TransferPair rows, of=self",
 }
 
 

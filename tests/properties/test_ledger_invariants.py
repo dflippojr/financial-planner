@@ -24,7 +24,7 @@ from hypothesis import strategies as st
 
 from finance.cash_flow import selected_accounts
 from finance.refund_links import link_refund
-from finance.transfer_pairing import confirm_transfer_pair, undo_transfer_pair
+from finance.transfer_pairing import confirm_transfer_pair, restore_transfer_pair, undo_transfer_pair
 from finance.csv_import.parser import Mapping
 from finance.csv_import.services import undo_import_batch
 from finance.export import minor_from_decimal_string, money_decimal
@@ -720,6 +720,40 @@ def test_matched_transfers_and_card_payments_add_nothing_to_household_cash_flow(
         assert ledger.totals(owner, household) == expected
         assert ledger.totals(owner) == expected
         assert ledger.report_income_and_spending(owner, household) == (expected.income, expected.spending)
+
+
+@given(transfer_cases(), st.data())
+def test_undoing_then_restoring_transfers_leaves_every_total_where_it_was(case, data):
+    """Undo then Restore (#635) puts every pair back, in any order, for every scope."""
+    transfers, background = case
+    legs = [leg for transfer in transfers for leg in transfer.legs()]
+    with ledger.isolated():
+        owner = ledger.make_member()
+        _household_ledger(owner, list(background) + legs)
+        pairs = list(TransferPair.objects.excluding_income_and_spending().order_by("pk").values_list("pk", flat=True))
+        assert len(pairs) == len(transfers)
+        scopes = ("", Account.Scope.HOUSEHOLD, Account.Scope.PRIVATE)
+
+        def every_total():
+            return {
+                scope: (
+                    ledger.totals(owner, selected_accounts(owner, scope=scope, cash_flow_only=True)),
+                    ledger.report_income_and_spending(owner, selected_accounts(owner, scope=scope, cash_flow_only=True)),
+                )
+                for scope in scopes
+            }
+
+        before = every_total()
+        undone = data.draw(st.lists(st.sampled_from(pairs), min_size=1, unique=True), label="undone")
+        restored = data.draw(st.permutations(undone), label="restored")
+        for pair_id in undone:
+            undo_transfer_pair(owner, pair_id)
+        assert TransferPair.objects.excluding_income_and_spending().count() == len(pairs) - len(undone)
+        for pair_id in restored:
+            restore_transfer_pair(owner, pair_id)
+
+        assert TransferPair.objects.excluding_income_and_spending().count() == len(pairs)
+        assert every_total() == before
 
 
 @st.composite

@@ -600,6 +600,13 @@ PROBE = {
     "eligible_id": "charges",
 }
 
+# A query parameter that names no object, and the owner's value for it.
+PROBE_VALUES = {
+    # A visit marker a minute before the private side's undone pair was undone,
+    # so the page would list that pair if it ignored visibility (#635).
+    "since": lambda side: str(int(side.undone_pair.undone_at.timestamp() - 60) * 1_000_000),
+}
+
 FILTERS = ("account", "tag", "scope")
 WINDOW = ("date_from", "date_to")
 REMOTE_ID = "SYN-REMOTE-1"
@@ -721,11 +728,14 @@ PAGE_ROUTES = {
         owner_canary=True,
     ),
     "transfer-review": PageRoute(
+        # The page keeps pairs undone since this visit marker in place (#635).
+        query=("since",),
         actions={
             "confirm": _pair_action("confirm", "suggested_pair"),
             "dismiss": _pair_action("dismiss", "suggested_pair"),
             "undo": _pair_action("undo", "marked_pair"),
-        }
+            "restore": _pair_action("restore", "undone_pair"),
+        },
     ),
     "recurring-review": PageRoute(
         query=("merge_series", "add_series"), owner_canary=True, actions=RECURRING_ACTIONS
@@ -1146,9 +1156,10 @@ def _side_rows(owner, household, account, card, label, amount_minor, when, index
 
 
 def _transfer_pairs(side, when, index):
-    """A suggested and an auto-marked card payment from the side's checking account to its card."""
+    """A suggested, an auto-marked and a member-undone card payment from the side's checking account to its card."""
     pairs = []
-    for offset, status in enumerate((TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED)):
+    statuses = (TransferPair.Status.SUGGESTED, TransferPair.Status.AUTO_MARKED, TransferPair.Status.UNDONE)
+    for offset, status in enumerate(statuses):
         amount = 5_150 + 100 * offset
         legs = [
             seed_transaction(
@@ -1164,9 +1175,13 @@ def _transfer_pairs(side, when, index):
                 kind=TransferPair.Kind.CARD_PAYMENT,
                 confidence=TransferPair.Confidence.HIGH,
                 reasons=["synthetic"],
+                **(
+                    {"undone_at": timezone.now(), "undone_by": side.owner}
+                    if status == TransferPair.Status.UNDONE else {}
+                ),
             )
         )
-    side.suggested_pair, side.marked_pair = pairs
+    side.suggested_pair, side.marked_pair, side.undone_pair = pairs
 
 
 def _series(person, name, status, members, index, cancelled_at=None):
@@ -1607,6 +1622,8 @@ def test_every_object_route_that_takes_a_post_says_what_its_body_names(world):
 
 
 def _probe_value(world, param):
+    if param in PROBE_VALUES:
+        return PROBE_VALUES[param](world.sides["private"])
     target = getattr(world.sides["private"], PROBE.get(param, "account"))
     return [str(item.pk) for item in target] if isinstance(target, list) else str(target.pk)
 

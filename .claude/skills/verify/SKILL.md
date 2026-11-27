@@ -76,6 +76,7 @@ report it; on failure, read `drive.log`, `log-excerpts.txt` and
 | `recurring` | `/recurring/` | Open recurring review | Recurring charges and Confirmed headings |
 | `dashboard` | `/` side panels | Open Home | Budgets panel lists Dining; Needs attention panel visible |
 | `alert` | `/alerts/` | Mark the seeded "Dining is over budget" alert read, reload, follow its link | Row loses Unread and Mark as read; link reaches Budgets |
+| `transfers` | `/transfers/` | Add a Synthetic Savings account and a 500.00 "Transfer from Checking" deposit that pairs with the seeded "Transfer to Savings"; Undo, Restore in place, Undo again, revisit, Restore from Recently undone | The undone row keeps its position with Restore where Undo was; Restore makes it an excluded row again; Recently undone lists it until restored (#635) |
 
 Add a row (an entry in `scripts/features.json`, which also sets the
 `--feature` choices and the phone page, plus a test in

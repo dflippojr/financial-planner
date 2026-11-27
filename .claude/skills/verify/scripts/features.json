@@ -3,5 +3,6 @@
   "cashflow": { "page": "/", "heading": "Cash flow" },
   "recurring": { "page": "/recurring/", "heading": "Recurring charges" },
   "dashboard": { "page": "/", "heading": "Cash flow" },
-  "alert": { "page": "/alerts/", "heading": "Alerts" }
+  "alert": { "page": "/alerts/", "heading": "Alerts" },
+  "transfers": { "page": "/transfers/", "heading": "Transfers and card payments" }
 }

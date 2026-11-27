@@ -1,4 +1,4 @@
-"""Transfer and card-payment pairing: find, score, auto-mark, revalidate, confirm, dismiss and undo.
+"""Transfer and card-payment pairing: find, score, auto-mark, revalidate, confirm, dismiss, undo and restore.
 
 Not to be confused with loan-to-asset pairing in loan_asset_pairing.py.
 """
@@ -14,6 +14,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from .access import DENIED
 from .access import require_person
@@ -50,6 +51,10 @@ from .refund_links import (
 )
 from .account_locks import lock_accounts
 
+
+# The Transfers page offers Restore for pairs undone this recently, this many at most (#635).
+RECENTLY_UNDONE_DAYS = 30
+RECENTLY_UNDONE_LIMIT = 50
 
 _PAIR_CACHE: ContextVar[dict | None] = ContextVar("pair_cache", default=None)
 
@@ -280,6 +285,25 @@ def _score_pairs(transactions):
     ]
 
 
+def _freed_transaction_ids(pairs):
+    """Legs of pairs a member undid: refresh may suggest a new pair on them but never auto-marks one (#635).
+
+    An auto-marked pair would be a new Excluded row above the one the member
+    just clicked, so the next click would land on another pair. Restore clears
+    `undone_at`, which frees the legs for auto-marking again.
+    """
+    freed = set()
+    for pair in pairs:
+        if pair.status == TransferPair.Status.UNDONE and pair.undone_at is not None:
+            freed.add(pair.leg_a_id)
+            freed.add(pair.leg_b_id)
+    return freed
+
+
+def _touches(pair, legs):
+    return pair.leg_a_id in legs or pair.leg_b_id in legs  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+
+
 def _occupied_transaction_ids(pairs):
     occupied = set()
     for pair in pairs:
@@ -360,13 +384,13 @@ def _lock_visible_transactions(person):
     )
 
 
-def _update_existing_pair(pair, scored, person):
+def _update_existing_pair(pair, scored, person, freed=()):
     if pair.status in _SETTLED_PAIR_STATUSES:
         return
     pair.confidence = scored["confidence"]
     pair.kind = scored["kind"]
     pair.reasons = scored["reasons"]
-    if scored["confidence"] == TransferPair.Confidence.HIGH:
+    if scored["confidence"] == TransferPair.Confidence.HIGH and not _touches(pair, freed):
         _snapshot_and_mark(pair, scored["left"], scored["right"], TransferPair.Status.AUTO_MARKED, person)
     else:
         pair.save(update_fields=("confidence", "kind", "reasons", "updated_at"))
@@ -675,6 +699,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
     locked_by_id = {item.pk: item for item in locked}
     _revalidate_marked_pairs(existing, locked_by_id, actor)
     occupied = _occupied_transaction_ids(existing.values())
+    freed = _freed_transaction_ids(existing.values())
     created = []
     visible_ids = set(visible_rows(Transaction, person).filter(
         pk__in=tx_ids, status=Transaction.Status.ACTIVE
@@ -697,7 +722,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
         left, right = scored["left"], scored["right"]
         key = (left.pk, right.pk)
         if key in existing:
-            _update_existing_pair(existing[key], scored, actor)
+            _update_existing_pair(existing[key], scored, actor, freed)
             continue
         if left.pk in occupied or right.pk in occupied:
             continue
@@ -713,7 +738,7 @@ def refresh_transfer_pairs(principal, *, actor=None, transaction_ids=None, previ
         existing[key] = pair
         occupied.add(left.pk)
         occupied.add(right.pk)
-        if scored["confidence"] == TransferPair.Confidence.HIGH:
+        if scored["confidence"] == TransferPair.Confidence.HIGH and not _touches(pair, freed):
             _snapshot_and_mark(pair, left, right, TransferPair.Status.AUTO_MARKED, actor)
         created.append(pair)
     return created
@@ -746,6 +771,25 @@ def _record_pair_event(person, leg, action, pair):
            metadata={"transaction_id": other.pk})
 
 
+def _relocked_pair(pair, statuses, legs=None):
+    """The pair row under lock, refused if it changed or vanished while this request waited.
+
+    Restore deletes competing suggestions, and two quick clicks race, so a pair
+    read before the locks may be gone or settled once they are held. `legs` are
+    the legs locked with their accounts: the audit event reads their scopes, so
+    they must be the ones read under the lock, never the copies loaded before
+    it (an account made private meanwhile would otherwise land on a shared
+    account's event). Without them the legs load lazily, after the locks.
+    """
+    locked = TransferPair.objects.select_for_update(of=("self",)).filter(pk=pair.pk).first()
+    if locked is None or locked.status not in statuses:
+        raise PermissionDenied(DENIED)
+    if legs is not None:
+        by_id = {leg.pk: leg for leg in legs}
+        locked.leg_a, locked.leg_b = by_id[locked.leg_a_id], by_id[locked.leg_b_id]  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+    return locked
+
+
 @transaction.atomic
 def confirm_transfer_pair(principal, pair_id):
     person, pair = _visible_pair(principal, pair_id)
@@ -755,7 +799,7 @@ def confirm_transfer_pair(principal, pair_id):
     left, right = locked[0], locked[1]
     if not _is_candidate(left, right):
         raise PermissionDenied(DENIED)
-    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    pair = _relocked_pair(pair, (TransferPair.Status.SUGGESTED,), locked)
     _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
     _record_pair_event(person, left, AuditEvent.Action.RECORD_ENABLED, pair)
     return pair
@@ -767,7 +811,7 @@ def dismiss_transfer_pair(principal, pair_id):
     if pair.status != TransferPair.Status.SUGGESTED:
         raise PermissionDenied(DENIED)
     lock_actor_household(person)
-    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    pair = _relocked_pair(pair, (TransferPair.Status.SUGGESTED,))
     pair.status = TransferPair.Status.DISMISSED
     pair.save(update_fields=("status", "updated_at"))
     _record_pair_event(person, pair.leg_a, AuditEvent.Action.RECORD_DISABLED, pair)
@@ -783,7 +827,65 @@ def undo_transfer_pair(principal, pair_id):
     by_id = {item.pk: item for item in locked}
     left = by_id[pair.leg_a_id]
     right = by_id[pair.leg_b_id]
-    pair = TransferPair.objects.select_for_update(of=("self",)).get(pk=pair.pk)
+    pair = _relocked_pair(pair, _MARKED_PAIR_STATUSES, locked)
     _unmark_exclusion(pair, left, right, person)
+    pair.undone_at = timezone.now()
+    pair.undone_by = person
+    pair.save(update_fields=("undone_at", "undone_by", "updated_at"))
     _record_pair_event(person, left, AuditEvent.Action.RECORD_DISABLED, pair)
+    return pair
+
+
+def _pairs_on_legs(pair, statuses):
+    legs = (pair.leg_a_id, pair.leg_b_id)  # pyright: ignore[reportAttributeAccessIssue] - runtime FK id attribute
+    return (
+        TransferPair.objects.filter(Q(leg_a_id__in=legs) | Q(leg_b_id__in=legs), status__in=statuses)
+        .exclude(pk=pair.pk)
+    )
+
+
+def _leg_excluded_elsewhere(pair, left, right):
+    # Not limited to pairs the member can see: a pair through another member's
+    # private account excludes the leg all the same, and a second exclusion
+    # would change totals.
+    if left.untracked_transfer or right.untracked_transfer:
+        return True
+    return _pairs_on_legs(pair, _MARKED_PAIR_STATUSES).exists()
+
+
+def recently_undone_pairs(principal):
+    """Pairs a member undid in the last 30 days that this viewer can see, newest first."""
+    since = timezone.now() - timedelta(days=RECENTLY_UNDONE_DAYS)
+    return (
+        visible_rows(TransferPair, principal)
+        .filter(status=TransferPair.Status.UNDONE, undone_at__gte=since)
+        .select_related("leg_a", "leg_b", "leg_a__account", "leg_b__account")
+        .order_by("-undone_at", "-pk")[:RECENTLY_UNDONE_LIMIT]
+    )
+
+
+@transaction.atomic
+def restore_transfer_pair(principal, pair_id):
+    """Confirm again a pair a member undid, if both legs still pair and nothing else excludes them (#635)."""
+    person, pair = _visible_pair(principal, pair_id)
+    if pair.status != TransferPair.Status.UNDONE or pair.undone_at is None:
+        raise PermissionDenied(DENIED)
+    locked = lock_accounts_and_transactions(person, [pair.leg_a, pair.leg_b])
+    left, right = locked[0], locked[1]
+    pair = _relocked_pair(pair, (TransferPair.Status.UNDONE,), locked)
+    if pair.undone_at is None:
+        raise PermissionDenied(DENIED)
+    if not _is_candidate(left, right) or _leg_excluded_elsewhere(pair, left, right):
+        raise PermissionDenied(DENIED)
+    # A suggestion found for a leg while the pair was undone would let a later
+    # Confirm exclude that leg twice, and refresh never suggests a pair on an
+    # excluded leg. Delete it rather than retire it: a suggestion holds no refund
+    # drops or history, and refresh can suggest it again if this pair is undone.
+    competing = _pairs_on_legs(pair, (TransferPair.Status.SUGGESTED,)).select_for_update(of=("self",)).order_by("pk")
+    TransferPair.objects.filter(pk__in=[item.pk for item in competing]).delete()
+    _snapshot_and_mark(pair, left, right, TransferPair.Status.CONFIRMED, person)
+    pair.undone_at = None
+    pair.undone_by = None
+    pair.save(update_fields=("undone_at", "undone_by", "updated_at"))
+    _record_pair_event(person, left, AuditEvent.Action.RECORD_ENABLED, pair)
     return pair
