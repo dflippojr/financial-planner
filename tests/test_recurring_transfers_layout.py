@@ -180,3 +180,37 @@ def test_unbroken_transfer_account_names_keep_actions_in_view(open_page, width):
         expect(button).to_be_visible()
         box = button.bounding_box()
         assert box["x"] >= 0 and box["x"] + box["width"] <= width
+
+
+# One client rect per line of text: a label broken letter by letter has many (#635).
+LABEL_LINES_JS = """(labels) => [...document.querySelectorAll('main button')]
+  .filter((button) => labels.includes(button.textContent.trim()))
+  .map((button) => {
+    const range = document.createRange();
+    range.selectNodeContents(button);
+    const tops = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)));
+    return [button.textContent.trim(), tops.size];
+  })"""
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_undo_and_restore_labels_stay_on_one_line(open_page, width):
+    """The action cells are whitespace-nowrap; the page's wrap-anywhere broke these labels letter by letter (#635)."""
+    owner = Account.objects.get(name="Synthetic Checking").owner
+    checking = Account.objects.get(name="Synthetic Checking")
+    savings = Account.objects.get(name="Synthetic Savings")
+    today = timezone.localdate()
+    for index, status in enumerate((TransferPair.Status.CONFIRMED, TransferPair.Status.UNDONE)):
+        out_leg = make_transaction(owner, checking, transaction_date=today, amount_minor=-31000 - index, description=f"Synthetic pair out {index}")
+        in_leg = make_transaction(owner, savings, transaction_date=today, amount_minor=31000 + index, description=f"Synthetic pair in {index}")
+        TransferPair.objects.create(
+            leg_a=out_leg, leg_b=in_leg, status=status, kind=TransferPair.Kind.TRANSFER,
+            confidence=TransferPair.Confidence.HIGH, reasons=["same amount", "same day"],
+            undone_at=timezone.now() if status == TransferPair.Status.UNDONE else None,
+            undone_by=owner if status == TransferPair.Status.UNDONE else None,
+        )
+    # since=0 reaches back over the Recently undone window, so the undone pair shows in place too.
+    page = open_page("/transfers/?since=0", width)
+    lines = page.evaluate(LABEL_LINES_JS, ["Undo exclusion", "Restore"])
+    assert sorted(label for label, _count in lines) == ["Restore", "Restore", "Undo exclusion"], lines
+    assert all(count == 1 for _label, count in lines), lines
