@@ -590,14 +590,8 @@
  {
   "file": "finance/lifecycle_services.py",
   "rule": "reportAttributeAccessIssue",
-  "message": "Cannot access attribute \"household_id\" for class \"Account\"",
-  "count": 1
- },
- {
-  "file": "finance/lifecycle_services.py",
-  "rule": "reportAttributeAccessIssue",
   "message": "Cannot access attribute \"household_id\" for class \"Membership\"",
-  "count": 8
+  "count": 7
  },
  {
   "file": "finance/lifecycle_services.py",

@@ -48,6 +48,7 @@ from .refund_links import (
     restore_refund_categories,
     restore_refund_links_for_pair,
 )
+from .account_locks import lock_accounts
 
 
 _PAIR_CACHE: ContextVar[dict | None] = ContextVar("pair_cache", default=None)
@@ -349,8 +350,7 @@ def _lock_visible_transactions(person):
     )
     if not transactions:
         return []
-    account_ids = sorted({item.account_id for item in transactions})
-    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    lock_accounts({item.account_id for item in transactions}, pks_only=True)
     tx_ids = sorted(item.pk for item in transactions)
     return list(
         Transaction.objects.select_for_update(of=("self",))
@@ -553,8 +553,7 @@ def revalidate_pairs_for_leg_ids(person, seed_leg_ids):
     if not rows:
         return
     all_leg_ids = sorted({leg_id for _pk, left_id, right_id in rows for leg_id in (left_id, right_id)})
-    account_ids = sorted(set(Transaction.objects.filter(pk__in=all_leg_ids).values_list("account_id", flat=True)))
-    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    lock_accounts(Transaction.objects.filter(pk__in=all_leg_ids).values_list("account_id", flat=True), pks_only=True)
     locked = list(
         Transaction.objects.select_for_update(of=("self",))
         .select_related("account", "account__household", "account__owner", "category")
@@ -639,8 +638,7 @@ def _lock_affected_transactions(person, transaction_ids, previous_keys):
         frontier = [row for pk, row in neighbors.items() if pk not in affected]
         affected.update((row.pk, row) for row in frontier)
         old_keys = ()
-    account_ids = sorted({row.account_id for row in affected.values()})
-    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    lock_accounts({row.account_id for row in affected.values()}, pks_only=True)
     return list(
         Transaction.objects.select_for_update(of=("self",))
         .filter(pk__in=sorted(affected))

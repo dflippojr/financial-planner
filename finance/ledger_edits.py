@@ -14,6 +14,7 @@ from .access import visible_rows
 from .audit_services import record_correction
 from .lifecycle_services import lock_actor_household
 from .models import Account, Membership, Transaction, TransactionCorrectionHistory
+from .account_locks import lock_accounts
 
 
 def history_label(category):
@@ -37,8 +38,7 @@ def record_text_history(transaction, actor, field_name, previous, new):
 
 def lock_accounts_and_transactions(person, transactions):
     lock_actor_household(person)
-    account_ids = sorted({item.account_id for item in transactions})
-    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    lock_accounts({item.account_id for item in transactions}, pks_only=True)
     ids = sorted(item.pk for item in transactions)
     locked = list(
         Transaction.objects.select_for_update(of=("self",))
@@ -55,8 +55,7 @@ def lock_accounts_and_transactions(person, transactions):
 
 
 def lock_owned_transactions(transactions):
-    account_ids = sorted({item.account_id for item in transactions})
-    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    lock_accounts({item.account_id for item in transactions}, pks_only=True)
     ids = sorted(item.pk for item in transactions)
     locked = list(
         Transaction.objects.select_for_update(of=("self",))

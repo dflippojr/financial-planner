@@ -15,6 +15,7 @@ from .access import DENIED
 from .audit_services import record
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, Person, Receipt, Transaction, person_for
+from .account_locks import lock_account
 
 _REJECTED = "That file could not be attached."
 _TOO_MANY = "A transaction can have at most 5 receipts."
@@ -209,12 +210,7 @@ def _lock_editable_transaction(person, transaction_id) -> Transaction:
     seed = Transaction.objects.filter(pk=transaction_id).values("account_id").first()
     if seed is None:
         raise PermissionDenied(DENIED)
-    account = (
-        Account.objects.visible_to(person)
-        .select_for_update()
-        .filter(pk=seed["account_id"])
-        .first()
-    )
+    account = lock_account(seed["account_id"], queryset=Account.objects.visible_to(person))
     if account is None:
         raise PermissionDenied(DENIED)
     financial_transaction = (
