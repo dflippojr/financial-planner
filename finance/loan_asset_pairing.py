@@ -8,6 +8,7 @@ from .access import visible_rows
 from .audit_services import append_event
 from .models import Account, AuditEvent, person_for, loan_asset_pairing_allowed
 from .snapshot_services import lock_editable_account
+from .account_locks import lock_account
 
 
 class PairingError(Exception):
@@ -27,11 +28,10 @@ def set_loan_secured_asset(principal, loan_id, asset_id):
         if changed:
             _audit_pairing(account, person)
         return account
-    asset = (
-        visible_rows(Account, principal)
-        .select_for_update(of=("self",))
-        .filter(pk=asset_id, status=Account.Status.ACTIVE, archived_at__isnull=True)
-        .first()
+    asset = lock_account(
+        asset_id,
+        queryset=visible_rows(Account, principal).filter(status=Account.Status.ACTIVE, archived_at__isnull=True),
+        of_self=True,
     )
     if asset is None:
         raise PermissionDenied(DENIED)

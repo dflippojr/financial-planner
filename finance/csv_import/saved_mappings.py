@@ -8,6 +8,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from finance.account_locks import update_accounts
 from finance.input_limits import MAX_COLUMNS
 from finance.access import require_person
 from finance.audit_services import record
@@ -152,7 +153,7 @@ def _name_taken(household, name, *, exclude_pk=None):
 
 
 def _clear_account_defaults(mapping):
-    Account.objects.filter(default_saved_csv_mapping=mapping).update(default_saved_csv_mapping=None)
+    update_accounts(Account.objects.filter(default_saved_csv_mapping=mapping), default_saved_csv_mapping=None)
 
 
 @transaction.atomic
@@ -307,8 +308,9 @@ def delete_or_archive_csv_mapping(principal, mapping_id):
             saved.archived_at = timezone.now()
             saved.save(update_fields=("status", "archived_at", "updated_at"))
             # An archived mapping is never offered at import, so it can't stay a default.
-            Account.objects.filter(default_saved_csv_mapping=saved).update(
-                default_saved_csv_mapping=None, updated_at=timezone.now()
+            update_accounts(
+                Account.objects.filter(default_saved_csv_mapping=saved),
+                default_saved_csv_mapping=None, updated_at=timezone.now(),
             )
             record(person, AuditEvent.Action.RECORD_ARCHIVED, AuditEvent.TargetType.CSV_MAPPING, target_id,
                    audience={"household": saved.household}, fields=("status",))

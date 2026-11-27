@@ -42,6 +42,7 @@ from .models import (
     TransactionCorrectionHistory,
     TransferPair,
 )
+from .account_locks import lock_accounts
 
 
 def _rule_or_404(principal, rule_id):
@@ -657,8 +658,7 @@ def _linked_refunds(transactions):
 def _lock_transactions(person, transactions):
     lock_actor_household(person)
     to_lock = list(transactions) + _linked_refunds(transactions)
-    account_ids = sorted({item.account_id for item in to_lock})
-    list(Account.objects.select_for_update().filter(pk__in=account_ids).order_by("pk"))
+    lock_accounts({item.account_id for item in to_lock}, pks_only=True)
     ids = sorted({item.pk for item in to_lock})
     return list(
         Transaction.objects.select_for_update(of=("self",))

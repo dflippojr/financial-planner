@@ -7,6 +7,7 @@ from .audit_services import record
 from .households import current_household
 from .lifecycle_services import lock_actor_household
 from .models import Account, AuditEvent, Tag, Transaction, person_for
+from .account_locks import lock_account
 
 TAG_NAME_ERROR = "Enter a tag name."
 TAG_EXISTS = "A tag with that name already exists."
@@ -114,9 +115,7 @@ def set_transaction_note_and_tags(principal, transaction_id, *, note, tag_ids, n
     if visible is None:
         raise PermissionDenied(DENIED)
     lock_actor_household(person)
-    account = (
-        Account.objects.visible_to(person).select_for_update().filter(pk=visible.account_id).first()
-    )
+    account = lock_account(visible.account_id, queryset=Account.objects.visible_to(person))
     if account is None:
         raise PermissionDenied(DENIED)
     txn = (

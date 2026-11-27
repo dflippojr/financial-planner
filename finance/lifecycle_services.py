@@ -5,6 +5,8 @@ from django.utils import timezone
 
 from .access import DENIED
 from .access import require_person
+from .account_locks import AccountSetGrew as _AccountSetGrew
+from .account_locks import holding_accounts, lock_account, lock_accounts, update_accounts
 from .audit_services import append_event, cleanup_member_events, prepare_account_deletion
 from .models import (
     AiPlanLink,
@@ -12,14 +14,18 @@ from .models import (
     Account,
     AccountLink,
     Alert,
+    Budget,
     ImportBatch,
     Invitation,
     Membership,
+    PlannedItem,
     Receipt,
     RecurringExclusion,
     RecurringSeries,
     RecurringSeriesMember,
     RefundLink,
+    SavedCsvMapping,
+    SavingsGoal,
     SimpleFinConnection,
     Transaction,
     TransactionCorrectionHistory,
@@ -36,7 +42,10 @@ LENT_CHOICES = (LENT_HANDOVER, LENT_DELETE)
 # Lock order, for every operation in this module: the household's current
 # memberships (in primary-key order), then accounts in primary-key order
 # (including counterpart accounts of transfer pairs and refund links), then
-# the rows being changed or deleted. Two transactions that take the same locks
+# the rows being changed or deleted. delete_member_data locks the memberships
+# of every household it writes, then every account it will touch, each in one
+# pk-ordered pass; any later account lock outside that pass, from any module,
+# restarts it (finance.account_locks, #810). Two transactions that take the same locks
 # in a different order can each hold what the other awaits, and PostgreSQL then
 # aborts one of them with a deadlock error. Always call lock_actor_household()
 # first.
@@ -84,13 +93,7 @@ def lock_ledger_writer(person):
 
 def _visible_account_for_update(principal, account_id, **annotations):
     """Lock a visible account; `annotations` are read in the same query."""
-    account = (
-        Account.objects.visible_to(principal)
-        .select_for_update()
-        .annotate(**annotations)
-        .filter(pk=account_id)
-        .first()
-    )
+    account = lock_account(account_id, queryset=Account.objects.visible_to(principal).annotate(**annotations))
     if account is None:
         raise PermissionDenied(DENIED)
     return account
@@ -234,10 +237,7 @@ def _pair_counterpart_account_ids(account_id, seed_leg_ids=None):
 
 
 def _lock_accounts_in_pk_order(account_ids):
-    ids = sorted(account_ids)
-    if not ids:
-        return
-    list(Account.objects.select_for_update().filter(pk__in=ids).order_by("pk"))
+    lock_accounts(account_ids, pks_only=True)
 
 
 def _lock_visible_account_with_counterparts(person, account_id, extras):
@@ -253,6 +253,12 @@ def _lock_visible_account_with_pair_counterparts(person, account_id, seed_leg_id
     )
 
 
+def _refund_account_ids(transaction_ids):
+    from finance.refund_links import account_ids_in_refunds_touching_transactions
+
+    return account_ids_in_refunds_touching_transactions(transaction_ids)
+
+
 def _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, seed_leg_ids=None):
     """Also lock the other accounts of the seed rows' refund links.
 
@@ -260,12 +266,10 @@ def _lock_visible_account_with_pair_and_refund_counterparts(person, account_id, 
     join the ordered account locks rather than being reached after this
     account's rows are held.
     """
-    from finance.refund_links import account_ids_in_refunds_touching_transactions
-
     if seed_leg_ids is None:
         seed_leg_ids = list(Transaction.objects.filter(account_id=account_id).values_list("pk", flat=True))
     extras = _pair_counterpart_account_ids(account_id, seed_leg_ids)
-    extras |= account_ids_in_refunds_touching_transactions(seed_leg_ids) - {account_id}
+    extras |= _refund_account_ids(seed_leg_ids) - {account_id}
     return _lock_visible_account_with_counterparts(person, account_id, extras)
 
 
@@ -436,11 +440,7 @@ def end_current_membership(person, *, audit_actor=None):
         Transaction.objects.filter(account_id__in=household_account_ids).values_list("pk", flat=True)
     )
     counterpart_ids = _pair_counterpart_account_ids(None, seed_leg_ids)
-    locked_accounts = list(
-        Account.objects.select_for_update()
-        .filter(pk__in=set(household_account_ids) | counterpart_ids)
-        .order_by("pk")
-    )
+    locked_accounts = lock_accounts(set(household_account_ids) | counterpart_ids)
     household_accounts = [
         account for account in locked_accounts
         if account.scope == Account.Scope.HOUSEHOLD and account.household_id == own_membership.household_id
@@ -526,7 +526,8 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
     if not remaining_memberships:
         transitions = [(account, *unshared) for account in household_accounts]
         if account_ids:
-            Account.objects.filter(pk__in=account_ids).update(
+            update_accounts(
+                Account.objects.filter(pk__in=account_ids),
                 owner_id=person.pk,
                 scope=Account.Scope.PRIVATE,
                 household=None,
@@ -548,14 +549,16 @@ def _apply_shared_account_exit(person, household_accounts, remaining_memberships
     transitions = [(account, *unshared) for account in lent]
     transitions += [(account, AuditEvent.Action.ACCOUNT_OWNER_CHANGED, ("owner",)) for account in co_owned]
     if lent_ids:
-        Account.objects.filter(pk__in=lent_ids).update(
+        update_accounts(
+            Account.objects.filter(pk__in=lent_ids),
             scope=Account.Scope.PRIVATE,
             household=None,
             share_mode="",
             updated_at=transitioned_at,
         )
     if co_owned_ids:
-        Account.objects.filter(pk__in=co_owned_ids).update(
+        update_accounts(
+            Account.objects.filter(pk__in=co_owned_ids),
             owner_id=successor_id,
             updated_at=transitioned_at,
         )
@@ -805,7 +808,8 @@ def _handover_lent_accounts(lent, submitted, successor):
     if handover_ids and successor is None:
         raise ValidationError("Every lent account needs a choice.")
     if handover_ids:
-        Account.objects.filter(pk__in=handover_ids).update(
+        update_accounts(
+            Account.objects.filter(pk__in=handover_ids),
             share_mode=Account.ShareMode.CO_OWNED,
             updated_at=timezone.now(),
         )
@@ -847,7 +851,7 @@ def _release_household_owned_rows(person):
             )
             if mine:
                 ImportBatch.objects.filter(saved_csv_mapping_id__in=mine).update(saved_csv_mapping=None)
-                Account.objects.filter(default_saved_csv_mapping_id__in=mine).update(default_saved_csv_mapping=None)
+                update_accounts(Account.objects.filter(default_saved_csv_mapping_id__in=mine), default_saved_csv_mapping=None)
                 SavedCsvMapping.objects.filter(pk__in=mine).delete()
             continue
         successor = successor_membership.person
@@ -964,7 +968,7 @@ def _tear_down_household(household_id):
     mapping_ids = list(SavedCsvMapping.objects.filter(household_id=household_id).values_list("pk", flat=True))
     if mapping_ids:
         ImportBatch.objects.filter(saved_csv_mapping_id__in=mapping_ids).update(saved_csv_mapping=None)
-        Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids).update(default_saved_csv_mapping=None)
+        update_accounts(Account.objects.filter(default_saved_csv_mapping_id__in=mapping_ids), default_saved_csv_mapping=None)
         SavedCsvMapping.objects.filter(pk__in=mapping_ids).delete()
     Category.objects.filter(household_id=household_id).delete()
     Invitation.objects.filter(household_id=household_id).delete()
@@ -997,25 +1001,154 @@ def _delete_login_user(user):
     user.delete()
 
 
-@transaction.atomic
+def _accounts_member_deletion_touches(person, own_household_id, last_member):
+    """Every account delete_member_data may lock or write, so it locks them all in one pk-ordered pass (#810).
+
+    The member's own accounts and their current household's accounts (the exit
+    may make any of them the member's and delete it), the other accounts of
+    pairs and refund links touching those, loans secured by any of them (their
+    pairing is cleared), and the accounts whose default CSV mapping the
+    deletion clears: mappings it deletes because nobody else is current in
+    their household, and, for the last member, every mapping of their own
+    household. A mapping handed over to another member stays a default, so
+    its accounts are not written (review r2 on #811).
+    """
+    ids = set(Account.objects.filter(owner=person).values_list("pk", flat=True))
+    if own_household_id is not None:
+        ids.update(
+            Account.objects.filter(scope=Account.Scope.HOUSEHOLD, household_id=own_household_id)
+            .values_list("pk", flat=True)
+        )
+    deleted_mappings = SavedCsvMapping.objects.filter(created_by=person).exclude(
+        household__memberships__in=Membership.objects.filter(ended_at__isnull=True).exclude(person=person)
+    )
+    mappings = Q(default_saved_csv_mapping__in=deleted_mappings)
+    if own_household_id is not None and last_member:
+        mappings |= Q(default_saved_csv_mapping__household_id=own_household_id)
+    seed_ids = list(Transaction.objects.filter(account_id__in=ids).values_list("pk", flat=True))
+    ids |= _pair_counterpart_account_ids(None, seed_ids)
+    ids |= _refund_account_ids(seed_ids)
+    ids.update(Account.objects.filter(Q(secured_asset_id__in=ids) | mappings).values_list("pk", flat=True))
+    return ids
+
+
+def _households_member_deletion_writes(person, own_household_id, account_ids):
+    """Households whose rows delete_member_data writes, as _release_household_owned_rows and the accounts reach them.
+
+    Their current memberships are locked first, in one pk-ordered pass, so a
+    remaining member's mapping edit, import, refund link or bulk undo in a
+    former household waits for the deletion or it waits for them (review r2
+    on #811): every one of those takes its household's membership locks first.
+    """
+    ids = {own_household_id} if own_household_id is not None else set()
+    for rows in (
+        PlannedItem.objects.filter(owner=person, scope=PlannedItem.Scope.HOUSEHOLD),
+        SavingsGoal.objects.filter(owner=person, scope=SavingsGoal.Scope.HOUSEHOLD),
+        Budget.objects.filter(owner=person, scope=Budget.Scope.HOUSEHOLD),
+        SavedCsvMapping.objects.filter(created_by=person),
+    ):
+        ids.update(rows.values_list("household_id", flat=True))
+    ids.update(
+        Account.objects.filter(pk__in=account_ids, scope=Account.Scope.HOUSEHOLD).values_list("household_id", flat=True)
+    )
+    ids.discard(None)
+    return ids
+
+
+class MemberDeletionUnsettled(RuntimeError):
+    """The member's accounts kept changing under the deletion; nothing was deleted."""
+
+
+MEMBER_DELETION_ATTEMPTS = 5
+
+
 def delete_member_data(principal, lent_choices=None):
-    """Remove this member's private data and login, keeping shared household rows."""
+    """Remove this member's private data and login, keeping shared household rows.
+
+    Each attempt is one transaction. It locks the memberships of every
+    household it writes, then every account it will touch, in one pk-ordered
+    pass each, and reads both sets again. If either grew, or a later step asks
+    for an account the first pass does not hold, the attempt rolls back,
+    releasing every lock, and starts again with a fresh first pass (#810).
+    After MEMBER_DELETION_ATTEMPTS it fails loudly instead.
+    """
+    known_accounts, known_households = set(), set()
+    for _attempt in range(MEMBER_DELETION_ATTEMPTS):
+        try:
+            return _delete_member_data_once(principal, lent_choices, known_accounts, known_households)
+        except _AccountSetGrew as grew:
+            known_accounts |= grew.account_ids
+            known_households |= grew.household_ids
+    raise MemberDeletionUnsettled(
+        f"The member's accounts changed during each of {MEMBER_DELETION_ATTEMPTS} attempts; nothing was deleted."
+    )
+
+
+def _lock_memberships_of_households(own_membership_id, household_ids):
+    """Lock the current memberships of these households in one pk-ordered pass.
+
+    Returns the person's own membership (own_membership_id) if it is still
+    current among them, or None, and every membership locked.
+    """
+    if not household_ids:
+        return None, []
+    memberships = list(
+        Membership.objects.select_for_update()
+        .filter(household_id__in=sorted(household_ids), ended_at__isnull=True)
+        .order_by("pk")
+    )
+    own = next((membership for membership in memberships if membership.pk == own_membership_id), None)
+    return own, memberships
+
+
+@transaction.atomic
+def _delete_member_data_once(principal, lent_choices, known_accounts, known_households):
     person = require_person(principal)
     user = person.user
     lent, submitted = _parsed_lent_choices(person, lent_choices)
-    own_membership, current_memberships = lock_actor_household(person)
-    household_id = own_membership.household_id if own_membership is not None else None
+    reference_id, reference_household_id = Membership.objects.filter(
+        person=person, ended_at__isnull=True
+    ).values_list("pk", "household_id").first() or (None, None)
+    guessed_accounts = known_accounts | _accounts_member_deletion_touches(
+        person, reference_household_id, last_member=False
+    )
+    household_ids = known_households | _households_member_deletion_writes(
+        person, reference_household_id, guessed_accounts
+    )
+    own_membership, _memberships = _lock_memberships_of_households(reference_id, household_ids)
+    household_id = reference_household_id if own_membership is not None else None
     remaining = []
     if own_membership is not None:
-        remaining = sorted(
-            (membership for membership in current_memberships if membership.pk != own_membership.pk),
-            key=lambda membership: (membership.joined_at, membership.pk),
+        # Already locked above; read again for the successor, earliest joined first.
+        remaining = list(
+            Membership.objects.filter(household_id=household_id, ended_at__isnull=True)
+            .exclude(pk=own_membership.pk)
+            .select_related("person")
+            .order_by("joined_at", "pk")
         )
     successor = remaining[0].person if remaining else None
-    owned_ids = list(Account.objects.filter(owner=person).values_list("pk", flat=True))
-    _lock_accounts_in_pk_order(owned_ids)
+
+    def settled_sets():
+        accounts = _accounts_member_deletion_touches(person, household_id, last_member=not remaining)
+        return accounts, _households_member_deletion_writes(person, household_id, accounts)
+
+    accounts, households = settled_sets()
+    accounts |= known_accounts
+    if not households <= household_ids:
+        raise _AccountSetGrew(accounts, household_ids | households)
+    _lock_accounts_in_pk_order(accounts)
+    # A link committed between the read and the lock reaches an account not
+    # locked yet. Taking it now could be out of pk order, so start again.
+    again_accounts, again_households = settled_sets()
+    if not again_accounts <= accounts or not again_households <= household_ids:
+        raise _AccountSetGrew(accounts | again_accounts, household_ids | again_households)
+    with holding_accounts(accounts):
+        _delete_member_data_under_locks(person, user, lent, submitted, household_id, successor)
+
+
+def _delete_member_data_under_locks(person, user, lent, submitted, household_id, successor):
     _handover_lent_accounts(lent, submitted, successor)
-    if own_membership is not None:
+    if household_id is not None:
         end_current_membership(person)
     _release_household_owned_rows(person)
     remaining_private_ids = list(

@@ -5,6 +5,7 @@ from .audit_services import changed_names, record, snapshot as audit_snapshot
 from .lifecycle_services import lock_actor_household
 from .access import DENIED, require_person
 from .models import Account, AuditEvent, BalanceSnapshot
+from .account_locks import lock_account
 
 
 class SnapshotError(Exception):
@@ -17,11 +18,10 @@ DUPLICATE_MANUAL = "A manual balance already exists for this date."
 def lock_editable_account(principal, account_id):
     person = require_person(principal)
     lock_actor_household(person)
-    account = (
-        Account.objects.visible_to(principal)
-        .select_for_update(of=("self",))
-        .filter(pk=account_id, status=Account.Status.ACTIVE, archived_at__isnull=True)
-        .first()
+    account = lock_account(
+        account_id,
+        queryset=Account.objects.visible_to(principal).filter(status=Account.Status.ACTIVE, archived_at__isnull=True),
+        of_self=True,
     )
     if account is None:
         raise PermissionDenied(DENIED)

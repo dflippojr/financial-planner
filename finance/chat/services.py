@@ -59,6 +59,7 @@ from ..models import (
 )
 from ..households import current_household
 from ..policy_services import household_ai_allowed, may_use_ai
+from ..account_locks import lock_accounts
 
 FEATURE = "chat"
 OUT_OF_SCOPE = (
@@ -222,9 +223,10 @@ def keep_conversation_if_visible(conversation_id):
     conversation = AiConversation.objects.select_related("member").filter(pk=conversation_id).first()
     if conversation is None:
         return False
+    lock_accounts(conversation.used_account_ids or [], pks_only=True)
     for field, model in _USED_ROWS.items():
         used = sorted(set(getattr(conversation, field) or []))
-        if used:
+        if used and model is not Account:
             list(model.objects.select_for_update().filter(pk__in=used).order_by("pk").values_list("pk", flat=True))
     if _uses_only_visible_rows(conversation, conversation.member):
         return True
